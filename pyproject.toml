@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hearthstone-replay-analyzer"
-version = "0.1.0"
+version = "1.0.0"
 description = "Extracteur factuel de replays Hearthstone HSReplay en français"
 readme = "README.md"
 requires-python = ">=3.11"
