@@ -123,6 +123,8 @@ def analyze_replay_data(
     data: bytes,
     cards_by_id: Mapping[str, Card],
     *,
+    english_cards_by_id: Mapping[str, Card] | None = None,
+    allow_en_fallback: bool = False,
     source_label: str = "mémoire",
     max_size_bytes: int = 50 * 1024 * 1024,
 ) -> GameAnalysis:
@@ -136,7 +138,14 @@ def analyze_replay_data(
         max_size_bytes=max_size_bytes,
     )
     facts = extract_replay_facts(context)
-    return build_game_analysis(facts, CardResolver(cards_by_id))
+    return build_game_analysis(
+        facts,
+        CardResolver(
+            cards_by_id,
+            english_cards_by_id=english_cards_by_id,
+            allow_en_fallback=allow_en_fallback,
+        ),
+    )
 
 
 def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
@@ -202,7 +211,7 @@ def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
     )
     diagnostics = ReplayDiagnostics(
         valid=True,
-        entity_count=len(timeline.entity_card_ids),
+        entity_count=_entity_count(facts.context.game_xml),
         event_count=event_count,
         turn_count=len(timeline.turns),
         resolved_card_count=max(0, len(entity_card_ids) - unresolved_occurrences),
@@ -255,6 +264,27 @@ def _known_opponent_cards(turns: list[object]) -> list[CardRef]:
             if card and card.visibility is Visibility.KNOWN and card.card_id:
                 known.setdefault(card.card_id, card)
     return [known[card_id] for card_id in sorted(known)]
+
+
+def _entity_count(game: ElementTree.Element) -> int:
+    entity_ids: set[int] = set()
+    for element in game.iter():
+        attribute = "id" if element.tag in {"GameEntity", "Player", "FullEntity"} else "entity"
+        if element.tag not in {
+            "GameEntity",
+            "Player",
+            "FullEntity",
+            "ShowEntity",
+            "ChangeEntity",
+            "HideEntity",
+            "TagChange",
+        }:
+            continue
+        try:
+            entity_ids.add(int(element.attrib[attribute]))
+        except (KeyError, ValueError):
+            continue
+    return len(entity_ids)
 
 
 def _extract_players(context: ReplayContext) -> list[RawPlayer]:

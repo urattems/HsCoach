@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from collections.abc import Sequence
+from dataclasses import replace
 
+from hscoach.cards import HearthstoneJSON
 from hscoach.config import AppConfig
+from hscoach.exceptions import HSCoachError
+from hscoach.input import load_source
+from hscoach.models import GameAnalysis
+from hscoach.replay.parser import analyze_replay_data
 
 LOGGER = logging.getLogger("hscoach")
 
@@ -69,32 +76,124 @@ def _interactive_choice() -> str:
     return input("Votre choix : ").strip()
 
 
+def _load_analysis(
+    source: str,
+    config: AppConfig,
+    *,
+    allow_en_fallback: bool = False,
+) -> GameAnalysis:
+    loaded = load_source(
+        source,
+        max_size_bytes=config.max_download_size_bytes,
+        timeout_seconds=config.http_timeout_seconds,
+    )
+    cards = HearthstoneJSON(
+        config.cache_directory,
+        locale=config.locale,
+        timeout=config.http_timeout_seconds,
+    ).load()
+    english_cards = None
+    if allow_en_fallback:
+        english_cards = HearthstoneJSON(
+            config.cache_directory,
+            locale="enUS",
+            timeout=config.http_timeout_seconds,
+        ).load()
+    return analyze_replay_data(
+        loaded.data,
+        cards,
+        english_cards_by_id=english_cards,
+        allow_en_fallback=allow_en_fallback,
+        source_label=loaded.source_label,
+        max_size_bytes=config.max_download_size_bytes,
+    )
+
+
+def _show_diagnostics(analysis: GameAnalysis) -> None:
+    diagnostics = analysis.diagnostics
+    print("Replay valide : oui")
+    print(f"Build Hearthstone : {analysis.metadata.build or 'inconnu'}")
+    print(f"Nombre d'entités : {diagnostics.entity_count}")
+    print(f"Nombre d'événements : {diagnostics.event_count}")
+    print(f"Nombre de demi-tours : {diagnostics.turn_count}")
+    print(f"Card IDs résolus : {diagnostics.resolved_card_count}")
+    print(f"Card IDs inconnus : {diagnostics.unresolved_card_count}")
+    print(f"Données de deck : {'oui' if diagnostics.has_player_deck else 'non'}")
+    print(f"Mulligan détecté : {'oui' if diagnostics.has_mulligan else 'non'}")
+    print(f"Options détectées : {'oui' if diagnostics.has_options else 'non'}")
+
+
+def _card_count_label(count: int) -> str:
+    return f"{count} {'carte' if count == 1 else 'cartes'}"
+
+
+def _run_interactive(config: AppConfig) -> int:
+    choice = _interactive_choice()
+    if choice == "1":
+        return main(["analyser", input("Chemin du replay : ").strip()])
+    if choice == "2":
+        return main(["analyser", input("URL XML directe : ").strip()])
+    if choice == "3":
+        cards = HearthstoneJSON(config.cache_directory, locale=config.locale).refresh()
+        print(f"Données des cartes actualisées : {_card_count_label(len(cards))}.")
+    elif choice == "4":
+        _show_configuration(config)
+    elif choice == "5":
+        print("Au revoir.")
+    else:
+        print("Choix invalide.")
+        return 2
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Exécuter la coque CLI; les traitements seront branchés aux étapes suivantes."""
+    """Exécuter la CLI et retourner un code de statut exploitable par le système."""
 
     parser = build_parser()
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
     config = AppConfig()
 
-    if args.command == "configuration":
-        _show_configuration(config)
-        return 0
-    if args.command in {"analyser", "inspecter", "actualiser-cartes"}:
-        print("Commande initialisée ; le traitement sera activé à l'étape suivante.")
-        return 0
-
-    choice = _interactive_choice()
-    if choice == "4":
-        _show_configuration(config)
-    elif choice == "5":
-        print("Au revoir.")
-    else:
-        print("Fonction en cours d'implémentation.")
-    return 0
+    try:
+        if args.command == "configuration":
+            _show_configuration(config)
+            return 0
+        if args.command == "actualiser-cartes":
+            localized_config = replace(config, locale=args.locale)
+            cards = HearthstoneJSON(
+                localized_config.cache_directory,
+                locale=localized_config.locale,
+                timeout=localized_config.http_timeout_seconds,
+            ).refresh()
+            print(f"Données des cartes actualisées : {_card_count_label(len(cards))}.")
+            return 0
+        if args.command == "inspecter":
+            analysis = _load_analysis(args.source, config)
+            _show_diagnostics(analysis)
+            return 0
+        if args.command == "analyser":
+            analysis = _load_analysis(
+                args.source,
+                config,
+                allow_en_fallback=args.allow_en_fallback,
+            )
+            print(
+                f"Replay chargé : {analysis.metadata.game_id} — "
+                "les exports seront écrits à l'étape suivante."
+            )
+            return 0
+        return _run_interactive(config)
+    except HSCoachError as exc:
+        LOGGER.error("%s", exc)
+        print(f"Erreur : {exc}", file=sys.stderr)
+        return 2
 
 
 def entrypoint() -> None:
     """Point d'entrée console qui convertit le code retour en statut processus."""
 
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
     raise SystemExit(main())

@@ -77,6 +77,20 @@ def test_unknown_card_is_french_and_registered() -> None:
     assert resolver.unresolved_ids == ("INCONNUE_42",)
 
 
+def test_english_fallback_is_disabled_unless_explicitly_requested() -> None:
+    english = parse_cards('[{"id":"ONLY_EN","name":"English name"}]')
+
+    default_resolver = CardResolver({}, english_cards_by_id=english)
+    explicit_resolver = CardResolver(
+        {},
+        english_cards_by_id=english,
+        allow_en_fallback=True,
+    )
+
+    assert default_resolver.resolve("ONLY_EN").name == "Carte inconnue [ONLY_EN]"
+    assert explicit_resolver.resolve("ONLY_EN").name == "English name"
+
+
 def test_hidden_reference_never_reveals_card_identity() -> None:
     resolver = CardResolver(parse_cards(cards_json()))
 

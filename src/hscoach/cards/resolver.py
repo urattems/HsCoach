@@ -15,9 +15,13 @@ class CardResolver:
         self,
         cards_by_id: Mapping[str, Card],
         *,
+        english_cards_by_id: Mapping[str, Card] | None = None,
+        allow_en_fallback: bool = False,
         unresolved: UnresolvedCards | None = None,
     ) -> None:
         self.cards_by_id = dict(cards_by_id)
+        self.english_cards_by_id = dict(english_cards_by_id or {})
+        self.allow_en_fallback = allow_en_fallback
         self.unresolved = unresolved or UnresolvedCards()
 
     @property
@@ -32,13 +36,29 @@ class CardResolver:
         normalized_id = card_id.strip() if isinstance(card_id, str) else ""
         card = self.cards_by_id.get(normalized_id)
         if card is not None:
-            if card.unresolved:
-                self.unresolved.add(normalized_id)
+            if not card.unresolved:
+                return card
+            fallback = self._english_fallback(normalized_id)
+            if fallback is not None:
+                return fallback
+            self.unresolved.add(normalized_id)
             return card
+
+        fallback = self._english_fallback(normalized_id)
+        if fallback is not None:
+            return fallback
 
         self.unresolved.add(normalized_id)
         name = f"Carte inconnue [{normalized_id}]" if normalized_id else "Carte inconnue"
         return Card(id=normalized_id, name=name, unresolved=True)
+
+    def _english_fallback(self, card_id: str) -> Card | None:
+        if not self.allow_en_fallback:
+            return None
+        card = self.english_cards_by_id.get(card_id)
+        if card is None or card.unresolved:
+            return None
+        return card
 
     def reference(
         self,
