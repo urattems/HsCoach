@@ -1,37 +1,26 @@
 # Hearthstone Replay Analyzer
 
-Hearthstone Replay Analyzer (`hscoach`) transforme un replay Hearthstone brut au
-format HSReplay XML en deux rapports factuels, structurés et anonymisés : un résumé
-Markdown lisible et un document JSON destiné à un LLM ou à un futur programme.
+Hearthstone Replay Analyzer (`hscoach`) transforme un replay Hearthstone au format
+HSReplay XML en trois rapports factuels, anonymisés et en français : un compte rendu
+Markdown, un JSON d'analyse exhaustif et un JSON compact destiné aux LLM.
 
-L'outil répond à la question « que s'est-il réellement passé dans cette partie ? ».
-Il reconstruit prudemment le deck du joueur, le mulligan, la chronologie, les états de
-main et de plateau connus, les options enregistrées et la provenance de certaines
-cartes générées. Il ne note pas les plays, ne recommande aucun choix et ne simule pas
-de ligne alternative.
+La version 2 corrige le sens temporel des états de jeu. Chaque demi-tour peut désormais
+contenir quatre snapshots distincts, des deltas avant/après et une chronologie enrichie.
+L'outil décrit ce que le replay permet d'observer ; il ne note pas les plays, ne conseille
+aucune action et ne simule pas de ligne alternative.
 
-La locale par défaut est `frFR`. Aucun nom anglais n'est utilisé silencieusement : une
-carte non résolue devient `Carte inconnue [CARD_ID]` et produit un avertissement.
+La locale par défaut est `frFR`. Une carte non résolue reste explicitement
+`Carte inconnue [CARD_ID]` ; aucun nom anglais n'est injecté silencieusement.
 
 ## Prérequis
 
-- Python 3.11 ou une version plus récente ;
-- un accès internet lors du premier chargement des données HearthstoneJSON, sauf si
-  un cache valide existe déjà ;
-- un replay local HSReplay ou une URL HTTP/HTTPS pointant directement vers son XML.
+- Python 3.11 ou plus récent ;
+- un replay HSReplay XML local, ou une URL HTTP/HTTPS pointant directement vers ce XML ;
+- un accès réseau au premier chargement de HearthstoneJSON, sauf si un cache valide existe.
 
-Les dépendances principales sont volontairement limitées :
-
-- `hsreplay` pour parser le format officiel HSReplay ;
-- `hslog` et `hearthstone` pour les paquets, les états et les enums HearthSim ;
-- `httpx` pour les téléchargements en streaming ;
-- `pytest` et `ruff` dans le groupe de développement.
+Les principales dépendances sont `hsreplay`, `hslog`, `hearthstone` et `httpx`.
 
 ## Installation
-
-Placez-vous à la racine du dépôt avant d'exécuter les commandes suivantes. Une
-installation éditable permet d'utiliser aussi bien `python -m hscoach` que la commande
-courte `hscoach` tant que l'environnement virtuel est actif.
 
 ### Windows PowerShell
 
@@ -42,19 +31,12 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-Si PowerShell bloque l'activation des scripts, autorisez-la uniquement pour le
-processus courant, puis réessayez :
+Si l'activation des scripts est bloquée, elle peut être autorisée pour le processus
+courant seulement :
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
-```
-
-Il est également possible de ne pas activer l'environnement et d'appeler directement
-son interpréteur :
-
-```powershell
-.\.venv\Scripts\python.exe -m hscoach --help
 ```
 
 ### Linux et macOS
@@ -66,153 +48,170 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-Pour une installation sans les outils de test et de lint, remplacez la dernière
-commande par `python -m pip install -e .`.
+Remplacez la dernière commande par `python -m pip install -e .` pour ne pas installer
+les outils de développement.
 
 ## Utilisation
 
-### Analyser un fichier local
+### Analyser un replay local
 
 ```bash
-python -m hscoach analyser samples/sample_replay.hsreplay
+python -m hscoach analyser chemin/partie.hsreplay
 ```
 
-Les extensions `.hsreplay`, `.xml` et `.txt` sont acceptées. Un fichier sans extension
-est également accepté, ce qui permet d'utiliser les replays exportés sans suffixe. Le
-contenu reste systématiquement validé comme un document HSReplay XML ; renommer un
-autre fichier ne suffit donc pas à le rendre acceptable.
+Les extensions `.hsreplay`, `.xml`, `.txt` et l'absence d'extension sont acceptées.
+Le contenu est toujours prévalidé comme un document HSReplay XML, indépendamment du
+nom du fichier.
 
-Une analyse réussie crée :
+Une analyse réussie crée atomiquement :
 
 ```text
 output/<game-id>/game_summary.md
 output/<game-id>/game_analysis.json
+output/<game-id>/game_llm.json
 ```
 
-Le dossier `<game-id>` est neutralisé si l'identifiant du replay ne peut pas être
-utilisé comme un nom de dossier sûr.
+Le dossier `<game-id>` est neutralisé pour empêcher tout path traversal. Relancer
+l'analyse d'une même partie remplace ces trois rapports.
 
 ### Analyser une URL XML directe
 
 ```bash
-python -m hscoach analyser "https://example.com/replay.hsreplay.xml?X-Amz-Signature=..."
+python -m hscoach analyser "https://example.com/replay.hsreplay.xml?signature=..."
 ```
 
-L'URL doit pointer directement vers le replay XML. Une page publique telle que
-`https://hsreplay.net/replay/<ID>` n'est pas prise en charge en V1. Seuls HTTP et HTTPS
-sont autorisés. Le téléchargement est effectué en streaming avec un timeout de
-20 secondes et une limite de 50 MiB par défaut.
+Seuls HTTP et HTTPS sont autorisés. Le téléchargement est effectué en streaming avec
+un timeout de 20 secondes et une limite de 50 Mio par défaut. Une URL publique de page
+comme `https://hsreplay.net/replay/<ID>` n'est pas prise en charge : `hscoach` ne scrape
+pas le site HSReplay et attend une URL directe vers le XML.
 
-Les paramètres d'une URL signée, notamment `X-Amz-Credential`,
-`X-Amz-Security-Token` et `X-Amz-Signature`, ne sont jamais affichés dans les logs ni
-recopiés dans les rapports.
+La query string d'une URL distante n'est ni loggée ni copiée dans les rapports, y
+compris en mode verbeux.
 
-### Utiliser le menu interactif
+### Menu et autres commandes
 
 ```bash
 python -m hscoach
-```
-
-Le menu en français permet d'analyser un fichier, d'analyser une URL XML directe,
-d'actualiser les cartes, d'afficher la configuration ou de quitter. Le programme
-exécute le choix puis rend la main au terminal.
-
-### Inspecter un replay sans produire de rapport
-
-```bash
-python -m hscoach inspecter samples/sample_replay.hsreplay
-```
-
-La commande affiche notamment la validité du replay, le build Hearthstone, le nombre
-d'entités, d'événements et de demi-tours, les Card IDs résolus ou inconnus, ainsi que
-la présence du deck, du mulligan et des options. Un « demi-tour » correspond au tour
-d'un seul côté ; le nombre de tours Hearthstone complets est donc une mesure distincte.
-
-### Actualiser les données des cartes
-
-```bash
+python -m hscoach inspecter chemin/partie.hsreplay
 python -m hscoach actualiser-cartes
-```
-
-La source utilisée par défaut est le `cards.json` complet de HearthstoneJSON en
-`frFR`, et non le seul sous-ensemble des cartes collectionnables. Le cache est stocké
-ici :
-
-```text
-.cache/hearthstonejson/frFR/cards.json
-.cache/hearthstonejson/frFR/metadata.json
-```
-
-Un cache valide est utilisé immédiatement. Si une actualisation échoue, le cache
-existant est conservé. Sans réseau et sans cache valide, la CLI retourne une erreur
-explicite en français.
-
-La locale à télécharger peut être précisée, même si `frFR` reste la valeur attendue
-pour l'usage normal :
-
-```bash
-python -m hscoach actualiser-cartes --locale frFR
-```
-
-### Afficher la configuration
-
-```bash
 python -m hscoach configuration
 ```
 
-Les valeurs V1 sont centralisées dans `AppConfig` : locale `frFR`, anonymisation
-active, taille maximale 50 MiB, timeout HTTP 20 secondes, sorties dans `output/` et
-cache dans `.cache/`. Ces chemins sont relatifs au dossier depuis lequel la commande
-est lancée.
+Le menu interactif reprend les mêmes opérations. `inspecter` analyse sans écrire de
+rapport et affiche les diagnostics principaux du replay. `configuration` affiche les
+valeurs actives : locale, anonymisation, limites réseau, sortie et cache.
 
-### Diagnostics détaillés et fallback anglais explicite
-
-L'option globale `--verbose` doit être placée avant la sous-commande :
+L'option globale `--verbose` doit précéder la sous-commande :
 
 ```bash
-python -m hscoach --verbose analyser replay.hsreplay
+python -m hscoach --verbose analyser chemin/partie.hsreplay
 ```
 
-Par défaut, une traduction française manquante reste inconnue. Le fallback anglais ne
-peut être activé que volontairement pour la commande d'analyse :
+Le fallback anglais reste volontaire et propre à une analyse :
 
 ```bash
-python -m hscoach analyser replay.hsreplay --allow-en-fallback
+python -m hscoach analyser chemin/partie.hsreplay --allow-en-fallback
 ```
+
+## Modèle temporel V2
+
+Un `turn` représente le demi-tour d'un seul côté. Les snapshots ne sont pas des
+synonymes : ils correspondent à des frontières `GameTag.STEP` précises.
+
+```text
+MAIN_READY       MAIN_ACTION          MAIN_END             MAIN_CLEANUP
+     │                │                   │                      │
+turn_start   action_phase_start   action_phase_end          turn_end
+     └─ pioche et triggers ─┘      └─ triggers de fin ────────┘
+```
+
+- `turn_start_state` : début protocolaire du demi-tour à `MAIN_READY`, avant la pioche
+  et les déclenchements de début de tour observés ensuite ;
+- `action_phase_start_state` : état à `MAIN_ACTION`, au moment où les décisions de jeu
+  deviennent disponibles ;
+- `action_phase_end_state` : état à `MAIN_END`, après les actions du joueur mais avant
+  les déclenchements de fin de tour ;
+- `turn_end_state` : état à `MAIN_CLEANUP`, après ces déclenchements.
+
+Les captures complètes ne sont faites qu'à ces frontières, pas après chaque
+micro-paquet. Si `MAIN_CLEANUP` manque, `MAIN_NEXT` peut servir de repli explicite. Un
+état à `FINAL_WRAPUP` n'est utilisé comme fin de tour que si `MAIN_END` a été observé ;
+une concession depuis la phase d'action ne fabrique donc pas une fausse fin de tour.
+Toute frontière réellement indisponible vaut `null` dans les JSON et produit un
+avertissement précis.
+
+Les propriétés Python `start_state` et `end_state` restent des alias de lecture pour
+les consommateurs V1. Elles désignent respectivement le début et la fin de la phase
+d'action ; elles ne réintroduisent pas l'ancien schéma JSON.
+
+## Deltas, actions, choix et options
+
+Pour chacun des trois intervalles entre snapshots, le moteur de deltas compare les
+faits visibles :
+
+- changements d'entités avec valeur `before`, `after` et différence numérique ;
+- santé, armure et attaque des héros ;
+- mana disponible ou utilisé ;
+- mouvements entre main et plateau connus.
+
+Un intervalle reste présent avec `complete: false` si l'une de ses frontières manque.
+Les deltas atomiques conservent une séquence déterministe et leur phase. Une carte
+source n'est associée que si le protocole fournit une cible et une source explicites ;
+l'outil n'invente jamais une causalité.
+
+La chronologie classe, lorsque les paquets le permettent, les pioches, cartes jouées,
+sorts, invocations, attaques, dégâts, soins, morts, améliorations, affaiblissements,
+silences, créations, transformations, mélanges, secrets, fatigue et choix. Un paquet
+non compris reste un événement non classifié avec ses métadonnées techniques utiles,
+sans copie du XML brut.
+
+Les `Choices` non-mulligan sont conservés avec les cartes proposées et choisies. Une
+Découverte n'est nommée ainsi que lorsque la mécanique `DISCOVER` est explicite. Les
+`Options` distinguent option disponible, indisponible et choisie. Leur erreur brute
+reste dans le JSON complet ; le Markdown masque notamment le marqueur technique
+`END_TURN error=INVALID` pour ne pas suggérer une décision inexistante.
+
+## Mulligan
+
+Le mulligan porte un statut indépendant des listes :
+
+- `known` : les catégories sont établies ; une liste vide signifie bien « aucune » ;
+- `partial` : seule une partie est déterminable et un avertissement expose l'ambiguïté ;
+- `unknown` : les données manquent et les catégories inconnues valent `null`.
+
+Le Markdown rend donc une liste vide par `Aucune.` et une valeur `null` par
+`Non déterminé.`. Il ne déduit pas les cartes renvoyées d'un simple nom de paquet.
 
 ## Rapports produits
 
-Les deux fichiers sont encodés en UTF-8 et écrits de façon atomique. Relancer
-l'analyse du même `game-id` remplace les rapports correspondants.
-
 ### `game_summary.md`
 
-Le Markdown privilégie une lecture compacte par un humain ou un LLM. Il contient :
+Le rapport lisible présente le résultat, les classes, le deck joueur connu, le
+mulligan, le démarrage protocolaire et les effets de gameplay distincts. Chaque
+demi-tour sépare :
 
-- le résumé de la partie, les classes, le résultat, le format et la durée connue ;
-- le deck du joueur groupé par coût, sous les noms français disponibles ;
-- la main proposée au mulligan, les cartes conservées, renvoyées et reçues ;
-- les effets distincts observés au début de la partie ;
-- chaque demi-tour avec mana, héros, main connue, plateau, actions et décisions ;
-- les statistiques actuelles reconstruites des serviteurs, et non seulement leurs
-  statistiques imprimées ;
-- les événements importants, informations inconnues et avertissements du parseur.
+1. le début du demi-tour ;
+2. l'état « Au moment de décider » ;
+3. les décisions enregistrées et les actions effectuées ;
+4. les changements observés ;
+5. la fin de phase d'action ;
+6. l'état après les déclenchements de fin de tour.
 
-Le deck adverse n'est jamais extrapolé à partir d'un archétype. Il reste indiqué comme
-inconnu lorsqu'il n'est pas explicitement présent dans le replay.
+Les statistiques affichées sont celles reconstruites à l'instant concerné. Les
+répétitions de protocole ne sont pas présentées comme plusieurs effets de gameplay ;
+seuls de vrais événements de gameplay identiques peuvent être regroupés.
 
-### `game_analysis.json`
+### `game_analysis.json` — schéma `2.0`
 
-Le JSON est déterministe, utilise des clés techniques stables en anglais et commence
-par :
+Le JSON exhaustif est déterministe et commence par :
 
 ```json
 {
-  "schema_version": "1.0"
+  "schema_version": "2.0"
 }
 ```
 
-Sa structure racine est la suivante :
+Ses clés racine stables sont :
 
 ```text
 schema_version
@@ -228,139 +227,123 @@ warnings
 diagnostics
 ```
 
-`turns` contient un élément par demi-tour avec son numéro de manche, le côté actif,
-l'état de début, les actions, les décisions enregistrées et l'état de fin. Les cartes
-et événements conservent, lorsque pertinent, leur visibilité (`known` ou `hidden`) et
-leur source d'information (`replay_explicit`, `gamestate_reconstructed` ou
-`uncertain`). Les détails techniques nécessaires au diagnostic restent dans le JSON,
-sans inclure le XML brut ni la source d'entrée.
+Chaque demi-tour contient les quatre snapshots, les actions, décisions, choix,
+`entity_deltas` et `state_deltas`. Les erreurs d'option et les métadonnées de
+diagnostic y restent disponibles. Le passage de l'ancien couple ambigu
+`start_state`/`end_state` à quatre frontières change la structure publique : il
+justifie le passage SemVer du paquet à `2.0.0` et du schéma de `1.0` à `2.0`.
 
-Le schéma `1.0` est défini par les dataclasses de `src/hscoach/models/` et le mapping
-public de `src/hscoach/output/json_export.py`. Toute évolution incompatible devra
-changer `schema_version`.
+### `game_llm.json` — schéma `hscoach-llm/1.0`
 
-## Confidentialité et sécurité
+Ce troisième export est factuel mais plus compact. Il utilise son propre identifiant :
 
-Les rapports sont conçus pour être partageables et l'anonymisation est toujours active
-dans la CLI V1 :
+```json
+{
+  "schema_version": "hscoach-llm/1.0"
+}
+```
 
-- le Markdown présente les deux côtés comme `JOUEUR` et `ADVERSAIRE`, tandis que le
-  JSON conserve les valeurs techniques anonymes `PLAYER` et `OPPONENT` ;
-- les BattleTags, noms de compte, `accountHi` et `accountLo` ne sont pas exportés ;
-- une URL signée complète n'est ni loggée ni conservée ;
-- une dernière barrière refuse l'écriture d'un rapport contenant encore un marqueur
-  sensible connu ;
-- un identifiant de partie hostile ne peut pas provoquer de path traversal ;
-- `.cache/` et `output/` sont ignorés par Git.
+Les informations statiques sont centralisées dans `cards.definitions`, les occurrences
+dans `cards.entities`, puis référencées depuis `player_deck`, `mulligan`,
+`start_of_game_events` et `turns`. L'état complet au moment de décider est conservé ;
+les frontières suivantes peuvent être représentées comme l'application des
+`state_changes` plutôt que par une nouvelle copie du board. `important_events`
+référence les séquences déjà présentes au lieu de dupliquer les événements. La racine
+inclut aussi `game` et `warnings`. Cette déduplication réduit fortement la taille sans
+retirer les décisions, les actions ou les limites connues ; elle ne constitue pas un
+résumé stratégique.
 
-Les entrées sont traitées comme non fiables. La prévalidation limite leur taille,
-vérifie la racine `HSReplay` et rejette notamment les DTD et déclarations d'entités
-avant de transmettre le contenu à `python-hsreplay`. Elle n'exécute aucun contenu et
-ne résout pas d'entité externe.
+Les deux schémas JSON sont versionnés indépendamment. Toute évolution incompatible de
+l'un doit modifier son identifiant, ses tests de contrat et cette documentation.
 
-Les fichiers de replay bruts peuvent néanmoins contenir des identifiants personnels.
-Ne les publiez pas sans les avoir examinés ; l'anonymisation porte sur les rapports
-générés, pas sur le fichier source.
+## Confidentialité et information cachée
 
-## Limites importantes
+Les rapports partageables passent tous par la même garde de confidentialité :
 
-- Le replay décrit ce qui s'est réellement produit. L'outil ne simule pas ce qui se
-  serait produit après un autre choix.
-- Les cartes adverses cachées restent inconnues. Une identité révélée plus tard n'est
-  pas appliquée rétroactivement aux états antérieurs.
-- `Options` et `SendOption` décrivent uniquement les propositions enregistrées par le
-  client à un instant donné. Ils ne constituent pas un moteur stratégique et ne
-  représentent pas nécessairement toutes les séquences de jeu possibles.
-- Le programme n'évalue pas la qualité d'un play, ne donne pas de score et ne propose
-  pas de « meilleur coup ».
-- Certaines interactions Hearthstone complexes, données absentes ou versions futures
-  du protocole peuvent empêcher une reconstruction parfaite. L'outil préfère alors
-  une carte inconnue, un événement non classifié ou un avertissement à une information
-  inventée.
-- Le mulligan est classé à partir des changements de zone réellement observés. Lorsqu'une
-  distinction n'est pas suffisamment établie, le rapport indique une reconstruction
-  partielle.
-- Les statistiques, la main, le plateau, l'arme et le pouvoir héroïque ne sont affichés
-  que dans la mesure où l'état HearthSim permet de les reconstruire au moment concerné.
-- La V1 accepte une URL XML directe, mais ne scrape pas les pages HSReplay, ne lit pas
-  `Power.log`, n'analyse pas automatiquement un dossier et ne fournit ni GUI ni service
-  web.
+- les côtés sont `JOUEUR`/`ADVERSAIRE` dans le Markdown et
+  `PLAYER`/`OPPONENT` dans les JSON ;
+- BattleTags, noms de compte, `accountHi`, `accountLo`, credentials, tokens et
+  signatures ne sont pas exportés ;
+- les motifs d'URL signée sont recherchés dans chacun des trois rapports avant
+  écriture ;
+- le deck adverse n'est jamais extrapolé à partir d'un archétype ;
+- une carte adverse cachée reste inconnue au moment concerné, même si son identité est
+  révélée plus tard ;
+- un `game-id` hostile ne peut pas sortir du dossier `output/`.
 
-## Dépannage
+Le XML d'entrée est non fiable : taille limitée, racine `HSReplay` vérifiée, DTD et
+déclarations d'entités refusées avant le parsing officiel. L'anonymisation protège les
+rapports générés, pas le replay brut lui-même.
 
-### `python` ou `py` est introuvable
+Les replays placés dans `samples/` sont donc privés et locaux. `.gitignore` ignore tout
+le contenu de ce dossier sauf `samples/.gitkeep`. Ne forcez jamais leur ajout à Git.
+`.cache/` et `output/` sont également ignorés.
 
-Installez Python 3.11 ou plus récent, puis vérifiez la version avec
-`python --version`. Sous Windows, le lanceur `py -3.11` peut être disponible même si
-la commande `python` ne l'est pas encore.
+## Cache HearthstoneJSON
 
-### L'activation PowerShell est refusée
+Le fichier complet `cards.json` frFR, qui comprend aussi héros, pouvoirs, jetons et
+enchantements, est conservé ici :
 
-Utilisez la commande `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
-montrée dans la section d'installation. Elle ne modifie pas durablement la politique
-de la machine. Vous pouvez aussi appeler `.\.venv\Scripts\python.exe` directement.
+```text
+.cache/hearthstonejson/frFR/cards.json
+.cache/hearthstonejson/frFR/metadata.json
+```
 
-### Le téléchargement des cartes échoue
+`metadata.json` contient l'empreinte SHA-256 attendue. Elle est vérifiée à chaque
+chargement avant de parser le cache. Un cache absent, illisible ou dont l'empreinte ne
+correspond pas est considéré comme corrompu : l'outil tente une actualisation, puis
+retourne une erreur claire si le réseau est indisponible. Lors d'une actualisation
+explicitement demandée, un ancien cache n'est conservé comme repli que s'il est lui-même
+valide. Les écritures sont atomiques.
 
-Vérifiez la connexion puis exécutez `python -m hscoach actualiser-cartes`. Un cache
-valide reste utilisable hors ligne. Si aucun cache n'existe, une première connexion à
-HearthstoneJSON est indispensable.
+## Diagnostics
 
-### Une URL distante retourne 401 ou 403
+Le document complet expose notamment les classes joueur/adversaire, les nombres de
+demi-tours, actions, deltas, améliorations, dégâts, soins, cartes créées, options,
+cartes inconnues et actions non classifiées, ainsi que le statut du mulligan et la
+complétude des quatre frontières. Ces compteurs sont factuels : il n'existe pas de
+score global de qualité de reconstruction.
 
-Les URL S3 signées expirent. Récupérez une nouvelle URL XML directe, sans la copier
-dans un ticket, un log ou un rapport public.
+## Limites
 
-### Le replay est déclaré invalide
-
-Vérifiez qu'il s'agit du XML HSReplay lui-même, et non d'une page HTML téléchargée ou
-d'une page `hsreplay.net/replay/...`. Les extensions prises en charge sont
-`.hsreplay`, `.xml`, `.txt` et l'absence d'extension.
-
-### Des cartes restent inconnues
-
-Actualisez d'abord le cache `frFR`. Si HearthstoneJSON ne fournit réellement pas la
-traduction, le comportement normal est de conserver `Carte inconnue [CARD_ID]`. Le
-fallback anglais est disponible uniquement via `--allow-en-fallback`.
-
-### Les rapports ne peuvent pas être écrits
-
-Vérifiez les droits d'écriture du dossier courant et l'absence d'un fichier nommé
-`output` à la place du dossier attendu. La CLI affiche une erreur en français et
-chaque fichier de rapport est remplacé atomiquement.
+- Le replay décrit uniquement ce qui s'est produit ; aucune alternative n'est simulée.
+- Les options enregistrées par le client ne représentent pas toutes les lignes
+  stratégiques possibles.
+- Les cartes adverses cachées, causalités implicites et frontières absentes restent
+  inconnues.
+- Certaines interactions nouvelles ou complexes peuvent rester non classifiées.
+- L'outil ne lit pas `Power.log`, n'analyse pas un dossier en continu, ne fournit ni
+  interface graphique ni service web.
+- Une URL XML directe est acceptée ; une page publique HSReplay ne l'est pas et aucun
+  scraping fragile n'est implémenté.
 
 ## Architecture
 
 ```text
 src/hscoach/
-├── cli.py                 interface en ligne de commande et menu français
-├── config.py              valeurs par défaut centralisées
-├── privacy.py             masquage et barrière avant export
-├── input/                 fichiers locaux, URL distantes et validation XML
-├── cards/                 cache HearthstoneJSON, localisation et résolution
-├── replay/                parsing, mulligan, timeline, options et game state
-├── models/                dataclasses stables de l'analyse
-└── output/                rendus Markdown et JSON
+├── cli.py                 CLI et menu français
+├── config.py              valeurs par défaut
+├── privacy.py             anonymisation et garde avant export
+├── input/                 fichiers, HTTP(S) et prévalidation XML
+├── cards/                 HearthstoneJSON, cache et résolution frFR
+├── replay/                parsing, phases, deltas, timeline, choix et mulligan
+├── models/                contrats de données V2
+└── output/                Markdown, JSON complet et JSON compact LLM
 
-tests/                     tests unitaires, sécurité et intégration réelle
-samples/                   replays locaux fournis par l'utilisateur
-output/                    rapports générés, jamais versionnés
-.cache/                    données HearthstoneJSON, jamais versionnées
+tests/                     tests unitaires, sécurité et contrats d'export
+samples/                   replays utilisateur privés et optionnels
+output/                    rapports locaux ignorés par Git
+.cache/                    données HearthstoneJSON ignorées par Git
 ```
-
-Le flux principal reste séparé en étapes : chargement sécurisé, parsing officiel,
-résolution frFR, reconstruction factuelle, anonymisation, puis rendu. Cette séparation
-évite de mélanger les entrées réseau, la logique de replay et la présentation.
 
 ## Tests et qualité
 
-La suite couvre notamment les entrées locales et distantes, la sécurité XML, le cache
-offline, la résolution française, le parser réel, le mulligan, la timeline, les états
-buffés, les informations cachées, les options, la confidentialité, la CLI et les deux
-exports.
-
-Les tests qui utilisent le replay réel attendent le fichier
-`samples/sample_replay.hsreplay`. Ce fichier utilisateur ne doit jamais être modifié.
+La suite principale ne dépend d'aucun replay utilisateur. Elle utilise de petites
+entrées anonymisées et couvre notamment les quatre frontières, les deltas, le
+mulligan, les options, les choix, le cache SHA-256, la confidentialité et les trois
+exports. Les tests d'intégration qui exploitent
+`samples/sample_replay.hsreplay` sont optionnels et sont ignorés automatiquement si le
+fichier local est absent.
 
 ```bash
 python -m pytest
@@ -368,21 +351,18 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 
-## Roadmap
+Pour vérifier réellement l'indépendance vis-à-vis des données privées, exécutez aussi
+la suite depuis un clone ne contenant que les fichiers suivis par Git. N'ajoutez jamais
+un replay réel à une fixture versionnée ; réduisez et anonymisez un cas minimal.
 
-### V2 — URL de page HSReplay
+## Dépannage rapide
 
-Accepter directement une URL `https://hsreplay.net/replay/<ID>` et récupérer le replay
-si une méthode stable, sûre et acceptable existe. Ce scraping n'est pas implémenté en
-V1.
-
-### V3 — replay local automatique
-
-Analyser directement `Power.log` ou le dernier replay produit localement par
-Hearthstone Deck Tracker afin de proposer une commande « Analyser ma dernière partie ».
-La lecture live et la surveillance de dossiers restent hors scope V1.
-
-### V4 — viewer local
-
-Ajouter une petite interface locale permettant de choisir un tour, voir la main et le
-plateau connus, parcourir les actions et exporter uniquement les tours intéressants.
+- Cache invalide hors ligne : lancez `python -m hscoach actualiser-cartes` lorsque le
+  réseau est disponible.
+- URL 401/403 : l'URL XML signée a probablement expiré ; obtenez-en une nouvelle sans
+  la copier dans un ticket ou un log.
+- Replay invalide : vérifiez qu'il s'agit du XML HSReplay, pas d'une page HTML.
+- Carte inconnue : actualisez le cache frFR ; utilisez le fallback anglais seulement
+  si vous l'acceptez explicitement.
+- État `null` : consultez `warnings` ; l'outil préfère signaler une frontière absente
+  plutôt que copier l'état d'un autre instant.
