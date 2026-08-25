@@ -54,6 +54,8 @@ class CardRef:
     attack: int | None = None
     health: int | None = None
     durability: int | None = None
+    card_type: str | None = None
+    mechanics: tuple[str, ...] = ()
     created_by_entity_id: int | None = None
 
 

@@ -93,5 +93,7 @@ class CardResolver:
             attack=card.attack,
             health=card.health,
             durability=card.durability,
+            card_type=card.type,
+            mechanics=card.mechanics,
             created_by_entity_id=created_by_entity_id,
         )

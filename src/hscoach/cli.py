@@ -7,12 +7,14 @@ import logging
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
+from pathlib import Path
 
 from hscoach.cards import HearthstoneJSON
 from hscoach.config import AppConfig
 from hscoach.exceptions import HSCoachError
 from hscoach.input import load_source
 from hscoach.models import GameAnalysis
+from hscoach.output import ExportedReports, export_analysis
 from hscoach.replay.parser import analyze_replay_data
 
 LOGGER = logging.getLogger("hscoach")
@@ -127,6 +129,33 @@ def _card_count_label(count: int) -> str:
     return f"{count} {'carte' if count == 1 else 'cartes'}"
 
 
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(Path.cwd()))
+    except ValueError:
+        return str(path)
+
+
+def _show_analysis_success(analysis: GameAnalysis, reports: ExportedReports) -> None:
+    deck_count = sum(item.count for item in analysis.player.deck)
+    mulligan_status = (
+        "partiellement reconstruit"
+        if analysis.mulligan.partially_reconstructed
+        else "reconstruit"
+    )
+    print("✓ Replay chargé")
+    print(f"✓ {_card_count_label(deck_count)} du deck identifiées")
+    print("✓ Données frFR chargées")
+    print(f"✓ Mulligan {mulligan_status}")
+    print(f"✓ {analysis.metadata.turn_count} tours analysés")
+    print("✓ Données anonymisées")
+    print()
+    print("Rapports créés :")
+    print()
+    print(_display_path(reports.markdown))
+    print(_display_path(reports.json))
+
+
 def _run_interactive(config: AppConfig) -> int:
     choice = _interactive_choice()
     if choice == "1":
@@ -172,15 +201,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             _show_diagnostics(analysis)
             return 0
         if args.command == "analyser":
+            print("Analyse du replay...")
+            print()
             analysis = _load_analysis(
                 args.source,
                 config,
                 allow_en_fallback=args.allow_en_fallback,
             )
-            print(
-                f"Replay chargé : {analysis.metadata.game_id} — "
-                "les exports seront écrits à l'étape suivante."
-            )
+            reports = export_analysis(analysis, config.output_directory)
+            _show_analysis_success(analysis, reports)
             return 0
         return _run_interactive(config)
     except HSCoachError as exc:

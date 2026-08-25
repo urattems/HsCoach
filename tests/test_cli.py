@@ -1,8 +1,11 @@
 from pathlib import Path
 
+import hscoach.cli as cli
 from hscoach.cards import HearthstoneJSON
 from hscoach.cli import build_parser, main
 from hscoach.config import AppConfig
+from hscoach.models import GameAnalysis, Player, PlayerSide, ReplayMetadata
+from hscoach.output import ExportedReports
 
 SAMPLE = Path(__file__).parents[1] / "samples" / "sample_replay.hsreplay"
 
@@ -59,3 +62,37 @@ def test_refresh_command_reports_card_count(monkeypatch, capsys) -> None:
     assert main(["actualiser-cartes"]) == 0
 
     assert "1 carte" in capsys.readouterr().out
+
+
+def test_analyse_command_exports_both_reports_in_french(monkeypatch, capsys, tmp_path) -> None:
+    analysis = GameAnalysis(
+        metadata=ReplayMetadata(game_id="42", turn_count=3),
+        player=Player(
+            side=PlayerSide.PLAYER,
+            entity_id=2,
+            player_id=1,
+            card_class="Chaman",
+        ),
+        opponent=Player(
+            side=PlayerSide.OPPONENT,
+            entity_id=3,
+            player_id=2,
+            card_class="Mage",
+        ),
+    )
+    reports = ExportedReports(
+        markdown=tmp_path / "42" / "game_summary.md",
+        json=tmp_path / "42" / "game_analysis.json",
+    )
+    monkeypatch.setattr(cli, "_load_analysis", lambda *args, **kwargs: analysis)
+    monkeypatch.setattr(cli, "export_analysis", lambda *args, **kwargs: reports)
+
+    assert main(["analyser", "replay.hsreplay"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Analyse du replay..." in output
+    assert "✓ Replay chargé" in output
+    assert "✓ Données anonymisées" in output
+    assert "Rapports créés :" in output
+    assert "game_summary.md" in output
+    assert "game_analysis.json" in output
