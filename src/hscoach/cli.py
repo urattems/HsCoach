@@ -13,7 +13,7 @@ from hscoach.cards import HearthstoneJSON
 from hscoach.config import AppConfig
 from hscoach.exceptions import HSCoachError
 from hscoach.input import load_source
-from hscoach.models import GameAnalysis
+from hscoach.models import GameAnalysis, KnowledgeStatus
 from hscoach.output import ExportedReports, export_analysis
 from hscoach.replay.parser import analyze_replay_data
 
@@ -118,11 +118,23 @@ def _show_diagnostics(analysis: GameAnalysis) -> None:
     print(f"Nombre d'entités : {diagnostics.entity_count}")
     print(f"Nombre d'événements : {diagnostics.event_count}")
     print(f"Nombre de demi-tours : {diagnostics.turn_count}")
+    print(f"Classe du joueur : {diagnostics.player_class}")
+    print(f"Classe adverse : {diagnostics.opponent_class}")
+    print(f"Actions classifiées : {diagnostics.action_count}")
+    print(f"Deltas d'état : {diagnostics.state_delta_count}")
+    print(f"Améliorations : {diagnostics.buff_count}")
+    print(f"Événements de dégâts : {diagnostics.damage_count}")
+    print(f"Événements de soins : {diagnostics.heal_count}")
+    print(f"Cartes créées : {diagnostics.created_card_count}")
+    print(f"Options enregistrées : {diagnostics.option_count}")
+    print(f"Événements non classifiés : {diagnostics.unknown_action_count}")
     print(f"Card IDs résolus : {diagnostics.resolved_card_count}")
     print(f"Card IDs inconnus : {diagnostics.unresolved_card_count}")
     print(f"Données de deck : {'oui' if diagnostics.has_player_deck else 'non'}")
     print(f"Mulligan détecté : {'oui' if diagnostics.has_mulligan else 'non'}")
+    print(f"Statut du mulligan : {diagnostics.mulligan_status.value}")
     print(f"Options détectées : {'oui' if diagnostics.has_options else 'non'}")
+    print(f"Complétude des snapshots : {diagnostics.game_state_completeness}")
 
 
 def _card_count_label(count: int) -> str:
@@ -138,20 +150,31 @@ def _display_path(path: Path) -> str:
 
 def _show_analysis_success(analysis: GameAnalysis, reports: ExportedReports) -> None:
     deck_count = sum(item.count for item in analysis.player.deck)
-    mulligan_status = (
-        "partiellement reconstruit" if analysis.mulligan.partially_reconstructed else "reconstruit"
-    )
+    mulligan_status = {
+        KnowledgeStatus.KNOWN: "reconstruit",
+        KnowledgeStatus.PARTIAL: "partiellement reconstruit",
+        KnowledgeStatus.UNKNOWN: "non déterminé",
+    }[analysis.mulligan.status]
     print("✓ Replay chargé")
     print(f"✓ {_card_count_label(deck_count)} du deck identifiées")
     print("✓ Données frFR chargées")
     print(f"✓ Mulligan {mulligan_status}")
-    print(f"✓ {analysis.metadata.turn_count} tours analysés")
+    print(
+        f"✓ {analysis.metadata.turn_count} tours complets, "
+        f"{analysis.diagnostics.turn_count} demi-tours analysés"
+    )
+    print(
+        f"✓ {analysis.diagnostics.action_count} actions et "
+        f"{analysis.diagnostics.state_delta_count} deltas reconstruits"
+    )
     print("✓ Données anonymisées")
     print()
     print("Rapports créés :")
     print()
     print(_display_path(reports.markdown))
     print(_display_path(reports.json))
+    if reports.llm is not None:
+        print(_display_path(reports.llm))
 
 
 def _run_interactive(config: AppConfig) -> int:
@@ -211,7 +234,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         return _run_interactive(config)
     except HSCoachError as exc:
-        LOGGER.error("%s", exc)
+        if args.verbose:
+            LOGGER.debug("Détail de l'erreur gérée par la CLI.", exc_info=True)
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2
 

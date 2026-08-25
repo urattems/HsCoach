@@ -1,0 +1,40 @@
+<HSReplay build="1" version="1.7">
+<Game ts="2026-01-01T12:00:00+00:00" id="fixture-anonyme" format="2" type="7">
+<GameEntity id="1">
+<Tag tag="202" value="1"/><Tag tag="49" value="1"/><Tag tag="53" value="1"/>
+</GameEntity>
+<Player id="2" playerID="1" accountHi="0" accountLo="1" name="JOUEUR_TEST">
+<Deck><Card id="TEST_DRAW"/></Deck>
+<Tag tag="50" value="1"/><Tag tag="202" value="2"/><Tag tag="27" value="4"/>
+<Tag tag="49" value="1"/><Tag tag="53" value="2"/>
+</Player>
+<Player id="3" playerID="2" accountHi="0" accountLo="2" name="ADVERSAIRE_TEST">
+<Tag tag="50" value="2"/><Tag tag="202" value="2"/><Tag tag="27" value="5"/>
+<Tag tag="49" value="1"/><Tag tag="53" value="3"/>
+</Player>
+<FullEntity id="4" cardID="TEST_HERO_PLAYER">
+<Tag tag="49" value="1"/><Tag tag="50" value="1"/><Tag tag="202" value="3"/>
+<Tag tag="45" value="30"/><Tag tag="199" value="8"/><Tag tag="53" value="4"/>
+</FullEntity>
+<FullEntity id="5" cardID="TEST_HERO_OPPONENT">
+<Tag tag="49" value="1"/><Tag tag="50" value="2"/><Tag tag="202" value="3"/>
+<Tag tag="45" value="30"/><Tag tag="199" value="5"/><Tag tag="53" value="5"/>
+</FullEntity>
+<FullEntity id="10" cardID="TEST_DRAW">
+<Tag tag="49" value="2"/><Tag tag="50" value="1"/><Tag tag="202" value="5"/>
+<Tag tag="53" value="10"/>
+</FullEntity>
+<TagChange entity="2" tag="23" value="1"/>
+<TagChange entity="1" tag="20" value="1"/>
+<TagChange entity="1" tag="19" value="6"/>
+<TagChange entity="10" tag="49" value="3" ts="2026-01-01T12:00:01+00:00"/>
+<TagChange entity="1" tag="19" value="10"/>
+<Block entity="10" type="7" ts="2026-01-01T12:00:02+00:00">
+<TagChange entity="10" tag="49" value="1"/>
+</Block>
+<TagChange entity="1" tag="19" value="12"/>
+<TagChange entity="1" tag="19" value="16"/>
+<TagChange entity="2" tag="17" value="4"/>
+<TagChange entity="3" tag="17" value="5"/>
+</Game>
+</HSReplay>

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 import hscoach.cli as cli
 from hscoach.cards import HearthstoneJSON
 from hscoach.cli import build_parser, main
@@ -8,6 +10,9 @@ from hscoach.models import GameAnalysis, Player, PlayerSide, ReplayMetadata
 from hscoach.output import ExportedReports
 
 SAMPLE = Path(__file__).parents[1] / "samples" / "sample_replay.hsreplay"
+requires_user_sample = pytest.mark.skipif(
+    not SAMPLE.is_file(), reason="Replay utilisateur local non disponible."
+)
 
 
 def test_cli_parses_analyse_command() -> None:
@@ -35,6 +40,7 @@ def test_configuration_command_is_in_french(capsys) -> None:
     assert "Anonymisation : oui" in output
 
 
+@requires_user_sample
 def test_inspect_command_displays_real_replay_diagnostics(monkeypatch, capsys) -> None:
     monkeypatch.setattr(HearthstoneJSON, "load", lambda self: {})
 
@@ -48,12 +54,14 @@ def test_inspect_command_displays_real_replay_diagnostics(monkeypatch, capsys) -
     assert "Options détectées : oui" in output
 
 
-def test_missing_replay_reports_a_french_error(capsys) -> None:
+def test_missing_replay_reports_one_french_error(capsys, caplog) -> None:
     assert main(["inspecter", "absent.hsreplay"]) == 2
 
     error = capsys.readouterr().err
-    assert "Erreur :" in error
-    assert "introuvable" in error
+    assert error.count("Erreur :") == 1
+    assert error.count("introuvable") == 1
+    assert "ERROR" not in error
+    assert not caplog.records
 
 
 def test_refresh_command_reports_card_count(monkeypatch, capsys) -> None:
