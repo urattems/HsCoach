@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import httpx
@@ -35,6 +36,15 @@ CARDS_PAYLOAD = [
 
 def cards_json() -> bytes:
     return json.dumps(CARDS_PAYLOAD, ensure_ascii=False).encode()
+
+
+def write_cache(service: HearthstoneJSON, payload: bytes) -> None:
+    service.cache_dir.mkdir(parents=True, exist_ok=True)
+    service.cards_path.write_bytes(payload)
+    service.metadata_path.write_text(
+        json.dumps({"sha256": hashlib.sha256(payload).hexdigest()}),
+        encoding="utf-8",
+    )
 
 
 def test_parse_cards_keeps_french_text_and_all_fields() -> None:
@@ -128,12 +138,12 @@ def test_load_downloads_full_cards_file_and_creates_metadata(tmp_path) -> None:
     assert metadata["locale"] == "frFR"
     assert metadata["card_count"] == 2
     assert metadata["source"].endswith("/frFR/cards.json")
+    assert metadata["sha256"] == hashlib.sha256(cards_json()).hexdigest()
 
 
 def test_load_uses_cache_without_network(tmp_path) -> None:
     service = HearthstoneJSON(tmp_path)
-    service.cache_dir.mkdir(parents=True)
-    service.cards_path.write_bytes(cards_json())
+    write_cache(service, cards_json())
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError(f"Accès réseau inattendu: {request.url.host}")
@@ -147,8 +157,7 @@ def test_load_uses_cache_without_network(tmp_path) -> None:
 
 def test_refresh_falls_back_to_valid_cache_without_modifying_it(tmp_path) -> None:
     service = HearthstoneJSON(tmp_path)
-    service.cache_dir.mkdir(parents=True)
-    service.cards_path.write_bytes(cards_json())
+    write_cache(service, cards_json())
     original_payload = service.cards_path.read_bytes()
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -165,8 +174,7 @@ def test_refresh_falls_back_to_valid_cache_without_modifying_it(tmp_path) -> Non
 def test_refresh_atomically_replaces_existing_cache(tmp_path) -> None:
     old_payload = json.dumps([{"id": "OLD", "name": "Ancienne carte"}]).encode()
     service = HearthstoneJSON(tmp_path)
-    service.cache_dir.mkdir(parents=True)
-    service.cards_path.write_bytes(old_payload)
+    write_cache(service, old_payload)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=cards_json())
@@ -187,5 +195,47 @@ def test_offline_without_cache_reports_clear_french_error(tmp_path) -> None:
     with (
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(CardDataError, match="Aucun cache local valide"),
+    ):
+        HearthstoneJSON(tmp_path, client=client).load()
+
+
+def test_hash_mismatch_triggers_refresh_and_replaces_corrupted_cache(tmp_path) -> None:
+    service = HearthstoneJSON(tmp_path)
+    altered_payload = '[{"id":"ALTERED","name":"Cache altéré"}]'.encode()
+    write_cache(service, altered_payload)
+    service.metadata_path.write_text(json.dumps({"sha256": "0" * 64}), encoding="utf-8")
+
+    request_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(200, content=cards_json())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        refreshed_service = HearthstoneJSON(tmp_path, client=client)
+        cards = refreshed_service.load()
+
+    assert request_count == 1
+    assert "ALTERED" not in cards
+    assert refreshed_service.cards_path.read_bytes() == cards_json()
+    metadata = json.loads(refreshed_service.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["sha256"] == hashlib.sha256(cards_json()).hexdigest()
+
+
+@pytest.mark.parametrize("metadata", [None, "pas du JSON", json.dumps({"sha256": "0" * 64})])
+def test_invalid_cache_is_never_used_offline(tmp_path, metadata: str | None) -> None:
+    service = HearthstoneJSON(tmp_path)
+    service.cache_dir.mkdir(parents=True)
+    service.cards_path.write_bytes(cards_json())
+    if metadata is not None:
+        service.metadata_path.write_text(metadata, encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("hors ligne", request=request)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(CardDataError, match="Cache HearthstoneJSON corrompu.*Actualisation"),
     ):
         HearthstoneJSON(tmp_path, client=client).load()

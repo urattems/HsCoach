@@ -8,7 +8,6 @@ import logging
 import os
 import tempfile
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -197,11 +196,14 @@ class HearthstoneJSON:
         """Actualiser atomiquement le cache, avec repli sur sa version valide."""
 
         cached_cards: dict[str, Card] | None = None
-        with suppress(CardDataError):
+        cache_error: CardDataError | None = None
+        try:
             cached_cards = self._load_cache()
+        except CardDataError as exc:
+            cache_error = exc
 
         try:
-            return self._download_and_cache()
+            return self._download_and_cache(cache_error=cache_error)
         except CardDataError:
             if cached_cards is None:
                 raise
@@ -218,10 +220,45 @@ class HearthstoneJSON:
                 raise CardDataError("Le cache des cartes dépasse la taille maximale autorisée.")
             payload = self.cards_path.read_bytes()
         except FileNotFoundError as exc:
-            raise CardDataError("Aucun cache HearthstoneJSON local n'est disponible.") from exc
+            raise CardDataError(
+                "Aucun cache local valide des cartes HearthstoneJSON n'est disponible."
+            ) from exc
         except OSError as exc:
             raise CardDataError("Le cache HearthstoneJSON local ne peut pas être lu.") from exc
+
+        expected_sha256 = self._load_expected_sha256()
+        actual_sha256 = hashlib.sha256(payload).hexdigest()
+        if actual_sha256 != expected_sha256:
+            raise CardDataError(
+                "Cache HearthstoneJSON corrompu : l'empreinte SHA-256 ne correspond pas."
+            )
         return parse_cards(payload)
+
+    def _load_expected_sha256(self) -> str:
+        try:
+            raw_metadata = self.metadata_path.read_bytes()
+            metadata = json.loads(raw_metadata)
+        except FileNotFoundError as exc:
+            raise CardDataError(
+                "Cache HearthstoneJSON corrompu : les métadonnées sont absentes."
+            ) from exc
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CardDataError(
+                "Cache HearthstoneJSON corrompu : les métadonnées sont invalides."
+            ) from exc
+
+        if not isinstance(metadata, Mapping):
+            raise CardDataError("Cache HearthstoneJSON corrompu : les métadonnées sont invalides.")
+        expected_sha256 = metadata.get("sha256")
+        if (
+            not isinstance(expected_sha256, str)
+            or len(expected_sha256) != 64
+            or any(character not in "0123456789abcdefABCDEF" for character in expected_sha256)
+        ):
+            raise CardDataError(
+                "Cache HearthstoneJSON corrompu : l'empreinte SHA-256 est invalide."
+            )
+        return expected_sha256.casefold()
 
     def _download_and_cache(self, *, cache_error: CardDataError | None = None) -> dict[str, Card]:
         try:
@@ -232,7 +269,7 @@ class HearthstoneJSON:
         except CardDataError as exc:
             if cache_error is None:
                 raise
-            raise CardDataError(f"{exc} Aucun cache local valide n'est disponible.") from exc
+            raise CardDataError(f"{cache_error} Actualisation impossible : {exc}") from exc
         except (httpx.HTTPError, OSError) as exc:
             message = "Impossible de télécharger les données de cartes HearthstoneJSON."
             if cache_error is not None:
