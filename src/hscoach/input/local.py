@@ -28,7 +28,7 @@ def load_local_replay(
 
     validate_size_limit(max_size_bytes)
     replay_path = Path(path)
-    if replay_path.suffix.lower() not in SUPPORTED_REPLAY_EXTENSIONS:
+    if replay_path.suffix and replay_path.suffix.lower() not in SUPPORTED_REPLAY_EXTENSIONS:
         extensions = ", ".join(sorted(SUPPORTED_REPLAY_EXTENSIONS))
         raise ReplayInputError(f"Extension de replay non prise en charge (attendu : {extensions}).")
 

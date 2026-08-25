@@ -13,7 +13,7 @@ from hscoach.input.remote import load_remote_replay, safe_remote_label
 VALID_REPLAY = b'<HSReplay build="1"><Game id="42" /></HSReplay>'
 
 
-@pytest.mark.parametrize("extension", [".hsreplay", ".xml", ".txt", ".XML"])
+@pytest.mark.parametrize("extension", [".hsreplay", ".xml", ".txt", ".XML", ""])
 def test_load_local_replay_accepts_supported_extensions(tmp_path, extension: str) -> None:
     replay_path = tmp_path / f"partie{extension}"
     replay_path.write_bytes(VALID_REPLAY)

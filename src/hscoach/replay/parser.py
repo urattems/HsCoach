@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import BytesIO
@@ -16,6 +17,16 @@ from hsreplay.document import HSReplayDocument
 from hscoach.cards.localization import card_class_fr, format_fr, game_type_fr
 from hscoach.exceptions import ReplayParseError
 from hscoach.input import validate_replay_xml
+from hscoach.models import (
+    Card,
+    CardRef,
+    DeckCard,
+    GameAnalysis,
+    Player,
+    PlayerSide,
+    ReplayDiagnostics,
+    Visibility,
+)
 from hscoach.models.game import ParseWarning, ReplayMetadata
 
 
@@ -106,6 +117,144 @@ def extract_replay_facts(context: ReplayContext) -> ReplayFacts:
     opponent = next(item for item in players if item.player_id != friendly_player_id)
     metadata = _extract_metadata(context, player)
     return ReplayFacts(context=context, metadata=metadata, player=player, opponent=opponent)
+
+
+def analyze_replay_data(
+    data: bytes,
+    cards_by_id: Mapping[str, Card],
+    *,
+    source_label: str = "mémoire",
+    max_size_bytes: int = 50 * 1024 * 1024,
+) -> GameAnalysis:
+    """Construire l'analyse factuelle complète à partir d'octets déjà chargés."""
+
+    from hscoach.cards.resolver import CardResolver
+
+    context = parse_replay_data(
+        data,
+        source_label=source_label,
+        max_size_bytes=max_size_bytes,
+    )
+    facts = extract_replay_facts(context)
+    return build_game_analysis(facts, CardResolver(cards_by_id))
+
+
+def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
+    """Assembler cartes, mulligan, chronologie, états et options d'un contexte validé."""
+
+    # Imports locaux : ces modules spécialisés dépendent du ReplayContext public.
+    from hscoach.replay.gamestate import capture_turn_snapshots
+    from hscoach.replay.mulligan import extract_mulligan
+    from hscoach.replay.options import extract_decisions
+    from hscoach.replay.timeline import extract_timeline
+
+    player = _player_model(facts.player, PlayerSide.PLAYER, resolver)
+    opponent = _player_model(facts.opponent, PlayerSide.OPPONENT, resolver)
+    mulligan_result = extract_mulligan(
+        facts.context,
+        resolver,
+        player_entity_id=facts.player.entity_id,
+        player_id=facts.player.player_id,
+    )
+    timeline = extract_timeline(
+        facts.context,
+        resolver,
+        player_entity_id=facts.player.entity_id,
+        opponent_entity_id=facts.opponent.entity_id,
+    )
+    snapshots = capture_turn_snapshots(
+        facts.context,
+        resolver,
+        friendly_player_id=facts.player.player_id,
+    )
+    decisions = extract_decisions(facts.context, resolver)
+
+    turns_by_number = {turn.turn_number: turn for turn in timeline.turns}
+    for snapshot in snapshots:
+        turn = turns_by_number.get(snapshot.turn_number)
+        if turn is None:
+            continue
+        turn.start_state = snapshot.start_state
+        turn.end_state = snapshot.end_state
+    for turn_number, items in decisions.by_turn.items():
+        turn = turns_by_number.get(turn_number)
+        if turn is not None:
+            turn.decisions.extend(items)
+
+    unresolved_ids = list(resolver.unresolved_ids)
+    warnings = [
+        *facts.context.warnings,
+        *mulligan_result.warnings,
+        *timeline.warnings,
+        *[
+            ParseWarning(
+                code="carte_non_resolue",
+                message=f"Traduction française introuvable : Carte inconnue [{card_id}].",
+            )
+            for card_id in unresolved_ids
+        ],
+    ]
+    opponent.known_cards = _known_opponent_cards(timeline.turns)
+    entity_card_ids = list(timeline.entity_card_ids.values())
+    unresolved_occurrences = sum(card_id in set(unresolved_ids) for card_id in entity_card_ids)
+    event_count = len(timeline.start_of_game_events) + sum(
+        len(turn.actions) for turn in timeline.turns
+    )
+    diagnostics = ReplayDiagnostics(
+        valid=True,
+        entity_count=len(timeline.entity_card_ids),
+        event_count=event_count,
+        turn_count=len(timeline.turns),
+        resolved_card_count=max(0, len(entity_card_ids) - unresolved_occurrences),
+        unresolved_card_count=unresolved_occurrences,
+        has_player_deck=bool(player.deck),
+        has_mulligan=bool(mulligan_result.mulligan.offered),
+        has_options=decisions.count > 0,
+    )
+    return GameAnalysis(
+        metadata=facts.metadata,
+        player=player,
+        opponent=opponent,
+        mulligan=mulligan_result.mulligan,
+        start_of_game_events=timeline.start_of_game_events,
+        turns=timeline.turns,
+        important_events=timeline.important_events,
+        unresolved_cards=unresolved_ids,
+        warnings=warnings,
+        diagnostics=diagnostics,
+    )
+
+
+def _player_model(raw: RawPlayer, side: PlayerSide, resolver: object) -> Player:
+    hero = (
+        resolver.reference(raw.hero_card_id, entity_id=raw.hero_entity_id)
+        if raw.hero_card_id
+        else None
+    )
+    deck = [
+        DeckCard(card=resolver.reference(card_id), count=count)
+        for card_id, count in raw.deck
+    ]
+    return Player(
+        side=side,
+        entity_id=raw.entity_id,
+        player_id=raw.player_id,
+        card_class=raw.card_class,
+        hero=hero,
+        deck=deck,
+    )
+
+
+def _known_opponent_cards(turns: list[object]) -> list[CardRef]:
+    known: dict[str, CardRef] = {}
+    for turn in turns:
+        for action in turn.actions:
+            if action.player is not PlayerSide.OPPONENT:
+                continue
+            card = action.source_card
+            if card and card.visibility is Visibility.KNOWN and card.card_id:
+                known.setdefault(card.card_id, card)
+    return [known[card_id] for card_id in sorted(known)]
 
 
 def _extract_players(context: ReplayContext) -> list[RawPlayer]:

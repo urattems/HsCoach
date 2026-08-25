@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from hscoach.exceptions import ReplayParseError
-from hscoach.replay.parser import extract_replay_facts, parse_replay_data
+from hscoach.models import PlayerSide
+from hscoach.replay.parser import analyze_replay_data, extract_replay_facts, parse_replay_data
 
 SAMPLE = Path(__file__).parents[1] / "samples" / "sample_replay.hsreplay"
 
@@ -38,3 +39,17 @@ def test_private_player_attributes_never_enter_structural_models() -> None:
 def test_hsreplay_without_game_is_rejected() -> None:
     with pytest.raises(ReplayParseError, match="aucune partie"):
         parse_replay_data(b'<HSReplay build="1" version="1.7"/>')
+
+
+def test_real_replay_builds_integrated_timeline_states_and_options() -> None:
+    analysis = analyze_replay_data(SAMPLE.read_bytes(), {}, source_label=SAMPLE.name)
+
+    assert analysis.schema_version == "1.0"
+    assert len(analysis.turns) == 12
+    assert analysis.turns[0].active_player is PlayerSide.PLAYER
+    assert all(turn.start_state is not None for turn in analysis.turns)
+    assert all(turn.end_state is not None for turn in analysis.turns)
+    assert sum(len(turn.decisions) for turn in analysis.turns) == 25
+    assert analysis.diagnostics.has_player_deck is True
+    assert analysis.diagnostics.has_mulligan is True
+    assert analysis.diagnostics.has_options is True

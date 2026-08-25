@@ -53,6 +53,7 @@ class CardRef:
     cost: int | None = None
     attack: int | None = None
     health: int | None = None
+    durability: int | None = None
     created_by_entity_id: int | None = None
 
 
