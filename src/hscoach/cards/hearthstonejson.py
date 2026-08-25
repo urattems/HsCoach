@@ -299,9 +299,7 @@ class HearthstoneJSON:
             ).encode("utf-8")
 
             cards_temporary = self._write_temporary(payload, suffix=".cards.tmp")
-            metadata_temporary = self._write_temporary(
-                metadata_payload, suffix=".metadata.tmp"
-            )
+            metadata_temporary = self._write_temporary(metadata_payload, suffix=".metadata.tmp")
             try:
                 os.replace(cards_temporary, self.cards_path)
                 os.replace(metadata_temporary, self.metadata_path)

@@ -115,9 +115,7 @@ def test_known_reference_copies_card_durability() -> None:
 
 def test_load_downloads_full_cards_file_and_creates_metadata(tmp_path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == (
-            "https://api.hearthstonejson.com/v1/latest/frFR/cards.json"
-        )
+        assert str(request.url) == ("https://api.hearthstonejson.com/v1/latest/frFR/cards.json")
         return httpx.Response(200, content=cards_json())
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:

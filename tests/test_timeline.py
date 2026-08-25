@@ -55,13 +55,9 @@ def test_real_replay_contains_ordered_half_turns_and_main_actions() -> None:
         any(action.action_type is ActionType.END_TURN for action in turn.actions)
         for turn in result.turns[:-1]
     )
-    assert all(
-        action.action_type is not ActionType.END_TURN for action in result.turns[-1].actions
-    )
+    assert all(action.action_type is not ActionType.END_TURN for action in result.turns[-1].actions)
 
-    action_types = {
-        action.action_type for turn in result.turns for action in turn.actions
-    }
+    action_types = {action.action_type for turn in result.turns for action in turn.actions}
     assert {
         ActionType.DRAW,
         ActionType.PLAY_CARD,
@@ -70,9 +66,11 @@ def test_real_replay_contains_ordered_half_turns_and_main_actions() -> None:
         ActionType.DEATH,
         ActionType.CREATE_CARD,
     } <= action_types
+    descriptions = [action.description for turn in result.turns for action in turn.actions]
+    assert "Victoire du JOUEUR." in descriptions
+    assert "Défaite de l’ADVERSAIRE." in descriptions
     assert any(
-        action.action_type is ActionType.START_GAME_EFFECT
-        for action in result.start_of_game_events
+        action.action_type is ActionType.START_GAME_EFFECT for action in result.start_of_game_events
     )
     all_actions = [action for turn in result.turns for action in turn.actions]
     assert {"PLAY", "POWER", "ATTACK", "DEATHS"} <= {

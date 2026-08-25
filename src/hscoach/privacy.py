@@ -41,9 +41,7 @@ def assert_shareable_text(text: str, *, identifiers: Iterable[str] = ()) -> None
     if _BATTLETAG_PATTERN.search(text):
         violations.append("BattleTag")
     if violations:
-        raise ExportError(
-            "Le rapport contient encore une donnée sensible et n'a pas été écrit."
-        )
+        raise ExportError("Le rapport contient encore une donnée sensible et n'a pas été écrit.")
 
 
 def _redact_url_match(match: re.Match[str]) -> str:

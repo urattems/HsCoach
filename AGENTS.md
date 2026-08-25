@@ -126,3 +126,20 @@ La V1 n’est terminée que si tous les points suivants sont vrais :
 - Garder les commits incrémentaux demandés et ne jamais committer avec des tests en
   échec.
 - Préserver tous les fichiers utilisateur et échantillons existants.
+
+## État réel de la V1
+
+- Les quatre commandes, le menu interactif, les entrées locales ou HTTP(S), le
+  cache frFR, le parseur intégré et les deux exports sont opérationnels.
+- `game_analysis.json` suit le schéma `1.0` et `turns` contient des demi-tours ; le
+  nombre de tours complets reste disponible dans `game.turn_count`.
+- Les rapports sont écrits atomiquement dans un sous-dossier de partie neutralisé,
+  après une dernière garde de confidentialité. Un même `game_id` remplace les deux
+  rapports précédents de cette partie.
+- Le Markdown masque les enchantements techniques invisibles pour rester compact ;
+  le JSON conserve les faits techniques complets disponibles dans le modèle.
+- Les limites assumées restent celles du protocole : options non stratégiques,
+  adversaire caché non deviné, mulligan parfois partiel, événements complexes
+  éventuellement non classifiés et absence de simulation ou de jugement des plays.
+- Les replays fournis dans `samples/` sont des données utilisateur locales : ils
+  servent à la validation réelle, restent inchangés et ne sont jamais commités.

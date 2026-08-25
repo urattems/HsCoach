@@ -240,10 +240,7 @@ def _player_model(raw: RawPlayer, side: PlayerSide, resolver: object) -> Player:
         if raw.hero_card_id
         else None
     )
-    deck = [
-        DeckCard(card=resolver.reference(card_id), count=count)
-        for card_id, count in raw.deck
-    ]
+    deck = [DeckCard(card=resolver.reference(card_id), count=count) for card_id, count in raw.deck]
     return Player(
         side=side,
         entity_id=raw.entity_id,
@@ -306,9 +303,7 @@ def _extract_players(context: ReplayContext) -> list[RawPlayer]:
             class_value = hero_tags.get(GameTag.CLASS)
 
         deck_counter = Counter(
-            card.attrib["id"]
-            for card in player_xml.findall("./Deck/Card")
-            if card.attrib.get("id")
+            card.attrib["id"] for card in player_xml.findall("./Deck/Card") if card.attrib.get("id")
         )
         players.append(
             RawPlayer(

@@ -51,9 +51,7 @@ def test_opponent_hidden_hand_never_exposes_future_identity() -> None:
 def test_current_buffed_stats_come_from_reconstructed_gamestate() -> None:
     fifth_turn = snapshots_from_real_replay()[4]
     maiev = next(
-        minion
-        for minion in fifth_turn.end_state.player.board
-        if minion.card.card_id == "JAIL_850"
+        minion for minion in fifth_turn.end_state.player.board if minion.card.card_id == "JAIL_850"
     )
 
     assert maiev.card.name == "Maiev la Gardienne"

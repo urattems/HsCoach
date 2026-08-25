@@ -224,12 +224,17 @@ class _TimelineBuilder:
                 )
             return
 
-        sequence = self._reserve_sequence() if block_type in {
-            BlockType.PLAY,
-            BlockType.POWER,
-            BlockType.ATTACK,
-            BlockType.TRIGGER,
-        } else None
+        sequence = (
+            self._reserve_sequence()
+            if block_type
+            in {
+                BlockType.PLAY,
+                BlockType.POWER,
+                BlockType.ATTACK,
+                BlockType.TRIGGER,
+            }
+            else None
+        )
         for child in block.packets:
             self._visit(child)
 
@@ -588,10 +593,10 @@ class _TimelineBuilder:
         side = self._side_for_entity(entity_id)
         if playstate is PlayState.WON:
             action_type = ActionType.VICTORY
-            description = f"Victoire de {_side_label(side)}."
+            description = f"Victoire {_possessive_side(side)}."
         elif playstate is PlayState.LOST:
             action_type = ActionType.DEFEAT
-            description = f"Défaite de {_side_label(side)}."
+            description = f"Défaite {_possessive_side(side)}."
         elif playstate is PlayState.CONCEDED:
             action_type = ActionType.CONCEDE
             description = f"{_side_label(side)} concède."
@@ -767,3 +772,11 @@ def _side_label(side: PlayerSide) -> str:
     if side is PlayerSide.OPPONENT:
         return "ADVERSAIRE"
     return "SYSTÈME"
+
+
+def _possessive_side(side: PlayerSide) -> str:
+    if side is PlayerSide.PLAYER:
+        return "du JOUEUR"
+    if side is PlayerSide.OPPONENT:
+        return "de l’ADVERSAIRE"
+    return "du SYSTÈME"

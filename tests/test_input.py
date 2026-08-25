@@ -47,7 +47,7 @@ def test_validate_replay_xml_accepts_official_hsreplay_root() -> None:
         b'<HSReplay xmlns="urn:hsreplay"><Game /></HSReplay>',
         b'<!DOCTYPE HSReplay SYSTEM "file:///etc/passwd"><HSReplay />',
         b'<!DOCTYPE HSReplay [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><HSReplay>&xxe;</HSReplay>',
-        '<!DOCTYPE HSReplay><HSReplay />'.encode("utf-16"),
+        "<!DOCTYPE HSReplay><HSReplay />".encode("utf-16"),
     ],
 )
 def test_validate_replay_xml_rejects_unsafe_or_invalid_documents(payload: bytes) -> None:
@@ -143,9 +143,7 @@ def test_remote_replay_enforces_content_length_limit() -> None:
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(ReplayInputError, match="taille maximale"),
     ):
-        load_remote_replay(
-            "https://replays.example/game.xml", max_size_bytes=100, client=client
-        )
+        load_remote_replay("https://replays.example/game.xml", max_size_bytes=100, client=client)
 
 
 def test_remote_replay_enforces_streamed_size_limit_without_content_length() -> None:

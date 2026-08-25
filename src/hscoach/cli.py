@@ -139,9 +139,7 @@ def _display_path(path: Path) -> str:
 def _show_analysis_success(analysis: GameAnalysis, reports: ExportedReports) -> None:
     deck_count = sum(item.count for item in analysis.player.deck)
     mulligan_status = (
-        "partiellement reconstruit"
-        if analysis.mulligan.partially_reconstructed
-        else "reconstruit"
+        "partiellement reconstruit" if analysis.mulligan.partially_reconstructed else "reconstruit"
     )
     print("✓ Replay chargé")
     print(f"✓ {_card_count_label(deck_count)} du deck identifiées")

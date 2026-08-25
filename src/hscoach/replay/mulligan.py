@@ -102,23 +102,19 @@ def extract_mulligan(
         resolver.reference(
             offered_card_ids.get(entity_id),
             entity_id=entity_id,
-            visibility=(
-                Visibility.KNOWN if offered_card_ids.get(entity_id) else Visibility.HIDDEN
-            ),
+            visibility=(Visibility.KNOWN if offered_card_ids.get(entity_id) else Visibility.HIDDEN),
         )
         for entity_id in offered_ids
     ]
     kept_ids = [
         entity_id
         for entity_id in offered_ids
-        if entities.get(entity_id) is not None
-        and entities[entity_id].zone == int(Zone.HAND)
+        if entities.get(entity_id) is not None and entities[entity_id].zone == int(Zone.HAND)
     ]
     returned_ids = [
         entity_id
         for entity_id in offered_ids
-        if entities.get(entity_id) is not None
-        and entities[entity_id].zone == int(Zone.DECK)
+        if entities.get(entity_id) is not None and entities[entity_id].zone == int(Zone.DECK)
     ]
     unresolved_ids = set(offered_ids) - set(kept_ids) - set(returned_ids)
 
@@ -210,10 +206,9 @@ def _apply_tag(entity: _EntityAtMulligan, raw_tag: str | None, raw_value: str | 
 
 
 def _is_player_mulligan(element: ElementTree.Element, player_entity_id: int) -> bool:
-    return (
-        element.attrib.get("entity") == str(player_entity_id)
-        and _integer(element.attrib.get("type")) == int(ChoiceType.MULLIGAN)
-    )
+    return element.attrib.get("entity") == str(player_entity_id) and _integer(
+        element.attrib.get("type")
+    ) == int(ChoiceType.MULLIGAN)
 
 
 def _is_first_main_ready(element: ElementTree.Element) -> bool:

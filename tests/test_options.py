@@ -29,8 +29,6 @@ def test_selected_option_is_marked_without_claiming_strategic_completeness() -> 
 
     assert all(sum(option.selected for option in decision.options) == 1 for decision in decisions)
     assert any(
-        option.description.startswith("Jouer ")
-        for item in decisions
-        for option in item.options
+        option.description.startswith("Jouer ") for item in decisions for option in item.options
     )
     assert sum(decision.selected_option_index == 0 for decision in decisions) == 6
