@@ -228,6 +228,14 @@ def _append_turns(lines: list[str], analysis: GameAnalysis) -> None:
             action
             for action in turn.actions
             if action.action_type not in {ActionType.START_TURN, ActionType.END_TURN}
+            and action.action_type
+            not in {
+                ActionType.DAMAGE,
+                ActionType.HEAL,
+                ActionType.BUFF,
+                ActionType.DEBUFF,
+                ActionType.SILENCE,
+            }
             and not _is_technical_enchantment(action)
         ]
         if actions:

@@ -120,7 +120,7 @@ def _show_diagnostics(analysis: GameAnalysis) -> None:
     print(f"Nombre de demi-tours : {diagnostics.turn_count}")
     print(f"Classe du joueur : {diagnostics.player_class}")
     print(f"Classe adverse : {diagnostics.opponent_class}")
-    print(f"Actions classifiées : {diagnostics.action_count}")
+    print(f"Actions enregistrées : {diagnostics.action_count}")
     print(f"Deltas d'état : {diagnostics.state_delta_count}")
     print(f"Améliorations : {diagnostics.buff_count}")
     print(f"Événements de dégâts : {diagnostics.damage_count}")
