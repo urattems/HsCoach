@@ -1,3 +1,44 @@
 [build-system]
-requires = []
-build-backend = ""
+requires = ["setuptools>=68,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hearthstone-replay-analyzer"
+version = "0.1.0"
+description = "Extracteur factuel de replays Hearthstone HSReplay en français"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Hearthstone Replay Analyzer contributors" }]
+dependencies = [
+    "hearthstone==9.20.10",
+    "hslog==1.20.0",
+    "hsreplay==1.16.2",
+    "httpx>=0.28.1,<0.29",
+    # hsreplay 1.16.2 importe encore pkg_resources à l'exécution.
+    "setuptools>=68,<82",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0,<10",
+    "ruff>=0.16,<0.17",
+]
+
+[project.scripts]
+hscoach = "hscoach.cli:entrypoint"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
