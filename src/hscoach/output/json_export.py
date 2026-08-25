@@ -24,9 +24,9 @@ __all__ = ["analysis_to_dict", "export_json", "render_json", "safe_game_id"]
 
 
 def analysis_to_dict(analysis: GameAnalysis) -> dict[str, Any]:
-    """Construire le document public conforme au schéma JSON 1.0."""
+    """Construire le document public conforme au schéma JSON 2.0."""
 
-    if analysis.schema_version != "1.0":
+    if analysis.schema_version != "2.0":
         raise ExportError(
             f"La version du schéma JSON n'est pas prise en charge : {analysis.schema_version!r}."
         )

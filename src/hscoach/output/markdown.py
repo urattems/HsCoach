@@ -14,10 +14,13 @@ from hscoach.models import (
     BoardState,
     CardRef,
     Decision,
+    EntityDelta,
     GameAnalysis,
+    KnowledgeStatus,
     MinionState,
     PlayerSide,
     SideState,
+    TurnPhase,
     Visibility,
 )
 from hscoach.privacy import assert_shareable_text
@@ -126,10 +129,17 @@ def _append_deck(lines: list[str], analysis: GameAnalysis) -> None:
 def _append_mulligan(lines: list[str], analysis: GameAnalysis) -> None:
     mulligan = analysis.mulligan
     lines.extend(["", "## Mulligan", ""])
-    if mulligan.partially_reconstructed:
+    if mulligan.status is KnowledgeStatus.PARTIAL:
         lines.extend(
             [
                 "> Mulligan partiellement reconstruit : les catégories ambiguës restent signalées.",
+                "",
+            ]
+        )
+    elif mulligan.status is KnowledgeStatus.UNKNOWN:
+        lines.extend(
+            [
+                "> Mulligan non déterminé : le replay ne contient pas assez de faits.",
                 "",
             ]
         )
@@ -146,11 +156,43 @@ def _append_mulligan(lines: list[str], analysis: GameAnalysis) -> None:
 
 
 def _append_start_events(lines: list[str], analysis: GameAnalysis) -> None:
-    lines.extend(["", "## Effets au début de la partie", ""])
+    lines.extend(["", "## Démarrage de la partie", ""])
     if not analysis.start_of_game_events:
         lines.append("Aucun effet de début de partie distinct n’a été observé.")
         return
-    lines.extend(f"- {action.description}" for action in analysis.start_of_game_events)
+    protocol = [
+        action
+        for action in analysis.start_of_game_events
+        if action.action_type is ActionType.START_GAME
+    ]
+    gameplay = [
+        action
+        for action in analysis.start_of_game_events
+        if action.action_type is not ActionType.START_GAME
+    ]
+    lines.extend(["### Protocole", ""])
+    lines.extend(f"- {action.description}" for action in protocol[:1])
+    if not protocol:
+        lines.append("- Début protocolaire non déterminé.")
+    lines.extend(["", "### Effets de gameplay", ""])
+    if not gameplay:
+        lines.append("- Aucun effet de gameplay distinct observé.")
+        return
+    counts: Counter[tuple[object, ...]] = Counter()
+    descriptions: dict[tuple[object, ...], str] = {}
+    for action in gameplay:
+        key = (
+            action.action_type,
+            action.player,
+            action.source_card.entity_id if action.source_card else None,
+            action.target_card.entity_id if action.target_card else None,
+            action.description,
+        )
+        counts[key] += 1
+        descriptions.setdefault(key, action.description)
+    for key, count in counts.items():
+        prefix = f"{count}× " if count > 1 else ""
+        lines.append(f"- {prefix}{descriptions[key]}")
 
 
 def _append_turns(lines: list[str], analysis: GameAnalysis) -> None:
@@ -165,12 +207,23 @@ def _append_turns(lines: list[str], analysis: GameAnalysis) -> None:
                 "",
                 f"## Tour {turn.round_number} — {side}",
                 "",
-                "### État au début",
+                "### Début du demi-tour",
                 "",
             ]
         )
-        lines.extend(_board_lines(turn.start_state))
-        lines.extend(["", "### Actions", ""])
+        lines.extend(_board_lines(turn.turn_start_state))
+        lines.extend(["", "### Au moment de décider", ""])
+        lines.extend(_board_lines(turn.action_phase_start_state))
+        if turn.decisions:
+            lines.extend(["", "### Décisions enregistrées", ""])
+            lines.append(
+                "> Ces options sont uniquement celles enregistrées par le client à cet instant ; "
+                "elles ne représentent pas toutes les lignes stratégiques possibles."
+            )
+            for decision in turn.decisions:
+                lines.extend(["", f"Décision {decision.sequence} :"])
+                lines.extend(_decision_lines(decision))
+        lines.extend(["", "### Actions effectuées", ""])
         actions = [
             action
             for action in turn.actions
@@ -183,17 +236,12 @@ def _append_turns(lines: list[str], analysis: GameAnalysis) -> None:
             )
         else:
             lines.append("Aucune action classifiée entre le début et la fin de ce demi-tour.")
-        if turn.decisions:
-            lines.extend(["", "### Décisions enregistrées", ""])
-            lines.append(
-                "> Ces options sont uniquement celles enregistrées par le client à cet instant ; "
-                "elles ne représentent pas toutes les lignes stratégiques possibles."
-            )
-            for decision in turn.decisions:
-                lines.extend(["", f"Décision {decision.sequence} :"])
-                lines.extend(_decision_lines(decision))
-        lines.extend(["", "### État en fin de tour", ""])
-        lines.extend(_board_lines(turn.end_state))
+        lines.extend(["", "### Changements observés", ""])
+        lines.extend(_observed_delta_lines(turn.entity_deltas))
+        lines.extend(["", "### Fin de la phase d’action", ""])
+        lines.extend(_board_lines(turn.action_phase_end_state))
+        lines.extend(["", "### Après les déclenchements de fin de tour", ""])
+        lines.extend(_board_lines(turn.turn_end_state))
 
 
 def _append_important_events(lines: list[str], analysis: GameAnalysis) -> None:
@@ -225,7 +273,12 @@ def _append_unknowns(lines: list[str], analysis: GameAnalysis) -> None:
     if any(
         state is not None and state.opponent.hidden_hand_count
         for turn in analysis.turns
-        for state in (turn.start_state, turn.end_state)
+        for state in (
+            turn.turn_start_state,
+            turn.action_phase_start_state,
+            turn.action_phase_end_state,
+            turn.turn_end_state,
+        )
     ):
         lines.append(
             "- Les identités cachées de la main adverse restent inconnues au moment observé."
@@ -240,9 +293,11 @@ def _append_warnings(lines: list[str], analysis: GameAnalysis) -> None:
     lines.extend(f"- [{warning.code}] {warning.message}" for warning in analysis.warnings)
 
 
-def _card_bullets(cards: Iterable[CardRef]) -> list[str]:
+def _card_bullets(cards: Iterable[CardRef] | None) -> list[str]:
+    if cards is None:
+        return ["- Non déterminé."]
     values = [card.name for card in cards]
-    return [f"- {value}" for value in values] if values else ["- Non déterminé."]
+    return [f"- {value}" for value in values] if values else ["- Aucune."]
 
 
 def _board_lines(state: BoardState | None) -> list[str]:
@@ -324,21 +379,84 @@ def _minion(minion: MinionState) -> str:
 
 
 def _decision_lines(decision: Decision) -> list[str]:
-    visible_options = [
-        option for option in decision.options if option.error is None or option.selected
+    chosen = [
+        option
+        for option in decision.options
+        if option.selected and not _is_invalid_end_turn_marker(option)
     ]
-    if not visible_options:
+    available = [
+        option
+        for option in decision.options
+        if option.available and not option.selected and not _is_invalid_end_turn_marker(option)
+    ]
+    unavailable = [
+        option
+        for option in decision.options
+        if not option.available and not option.selected and not _is_invalid_end_turn_marker(option)
+    ]
+    if not chosen and not available and not unavailable:
         return ["- Aucune option exploitable enregistrée."]
     lines: list[str] = []
-    for option in visible_options:
-        suffix = " — action choisie" if option.selected else ""
-        if option.error is not None:
-            suffix += " (un marqueur d’erreur est également enregistré)"
-        lines.append(f"- {option.description}{suffix}")
-    if decision.selected_option_index is not None and not any(
-        option.selected for option in visible_options
+    for option in chosen:
+        lines.append(f"- Action choisie : {option.description}")
+    for option in available:
+        lines.append(f"- Option disponible : {option.description}")
+    if unavailable:
+        count = len(unavailable)
+        lines.append(
+            f"- {count} option{'s' if count != 1 else ''} indisponible"
+            f"{'s' if count != 1 else ''} enregistrée{'s' if count != 1 else ''} "
+            "(détails bruts dans le JSON)."
+        )
+    if (
+        decision.selected_option_index is not None
+        and decision.selected_option_index != 0
+        and not any(option.selected for option in chosen)
     ):
         lines.append(f"- Action choisie : option {decision.selected_option_index}")
+    return lines
+
+
+def _is_invalid_end_turn_marker(option: object) -> bool:
+    return (
+        getattr(option, "option_type", None) == "Fin du tour"
+        and getattr(option, "error", None) == "INVALID"
+    )
+
+
+def _observed_delta_lines(deltas: list[EntityDelta]) -> list[str]:
+    visible_deltas = [
+        delta for delta in deltas if not delta.metadata.get("technical_lethal_damage_reset")
+    ]
+    if not visible_deltas:
+        return ["Aucun changement atomique supplémentaire classifié."]
+    lines: list[str] = []
+    for delta in visible_deltas:
+        before = delta.value.before
+        after = delta.value.after
+        difference = delta.value.delta
+        suffix = f" ({difference:+d})" if difference is not None else ""
+        phase = {
+            TurnPhase.ACTION_PHASE_START: "avant les actions",
+            TurnPhase.ACTION_PHASE_END: "pendant les actions",
+            TurnPhase.TURN_END: "après la fin des actions",
+            TurnPhase.TURN_START: "au début du demi-tour",
+            TurnPhase.UNKNOWN: "phase non déterminée",
+        }[delta.phase]
+        card = delta.card.name if delta.card is not None else f"Entité {delta.entity_id}"
+        attribute = {
+            "attack": "attaque",
+            "health": "points de vie",
+            "max_health": "points de vie maximum",
+            "damage_tag": "marqueur de dégâts technique",
+            "silenced": "silence",
+        }.get(delta.attribute, delta.attribute)
+        source = (
+            f", source explicite : {delta.source_card.name}"
+            if delta.source_card is not None
+            else ""
+        )
+        lines.append(f"- [{phase}] {card} — {attribute} : {before} → {after}{suffix}{source}.")
     return lines
 
 

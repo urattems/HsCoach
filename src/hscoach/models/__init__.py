@@ -1,16 +1,37 @@
 """Modèles publics de l'analyse."""
 
-from hscoach.models.action import ActionType, Decision, GameAction, PlayerSide, RecordedOption
+from hscoach.models.action import (
+    ActionType,
+    Decision,
+    GameAction,
+    PlayerSide,
+    RecordedChoice,
+    RecordedOption,
+    TurnPhase,
+)
 from hscoach.models.card import Card, CardRef, DeckCard, InformationSource, Visibility
 from hscoach.models.game import (
     GameAnalysis,
+    KnowledgeStatus,
     Mulligan,
     ParseWarning,
     Player,
     ReplayDiagnostics,
     ReplayMetadata,
 )
-from hscoach.models.state import BoardState, HeroState, MinionState, SideState, TurnState
+from hscoach.models.state import (
+    BoardState,
+    EntityDelta,
+    HeroDelta,
+    HeroState,
+    ManaDelta,
+    MinionState,
+    SideState,
+    StateDelta,
+    TurnState,
+    ValueDelta,
+    ZoneDelta,
+)
 
 __all__ = [
     "ActionType",
@@ -19,19 +40,28 @@ __all__ = [
     "CardRef",
     "Decision",
     "DeckCard",
+    "EntityDelta",
     "GameAction",
     "GameAnalysis",
     "HeroState",
+    "HeroDelta",
     "InformationSource",
+    "KnowledgeStatus",
+    "ManaDelta",
     "MinionState",
     "Mulligan",
     "ParseWarning",
     "Player",
     "PlayerSide",
     "RecordedOption",
+    "RecordedChoice",
     "ReplayDiagnostics",
     "ReplayMetadata",
     "SideState",
+    "StateDelta",
     "TurnState",
+    "TurnPhase",
+    "ValueDelta",
     "Visibility",
+    "ZoneDelta",
 ]

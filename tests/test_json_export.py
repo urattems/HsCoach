@@ -46,7 +46,7 @@ def _analysis(*, game_id: str = "partie-42") -> GameAnalysis:
     )
 
 
-def test_analysis_to_dict_uses_schema_1_and_stable_root_keys() -> None:
+def test_analysis_to_dict_uses_schema_2_and_stable_root_keys() -> None:
     document = analysis_to_dict(_analysis())
 
     assert list(document) == [
@@ -62,7 +62,7 @@ def test_analysis_to_dict_uses_schema_1_and_stable_root_keys() -> None:
         "warnings",
         "diagnostics",
     ]
-    assert document["schema_version"] == "1.0"
+    assert document["schema_version"] == "2.0"
     assert document["game"]["game_id"] == "partie-42"
     assert document["player"]["side"] == "PLAYER"
     assert document["important_events"][0]["action_type"] == "Pioche"
@@ -117,7 +117,7 @@ def test_export_refuses_sensitive_content_before_writing(tmp_path: Path) -> None
 
 def test_unknown_schema_version_is_rejected() -> None:
     analysis = _analysis()
-    analysis.schema_version = "2.0"
+    analysis.schema_version = "3.0"
 
     with pytest.raises(ExportError, match="version du schéma JSON"):
         analysis_to_dict(analysis)

@@ -7,8 +7,12 @@ from hscoach.models import PlayerSide
 from hscoach.replay.parser import analyze_replay_data, extract_replay_facts, parse_replay_data
 
 SAMPLE = Path(__file__).parents[1] / "samples" / "sample_replay.hsreplay"
+requires_user_sample = pytest.mark.skipif(
+    not SAMPLE.is_file(), reason="Replay utilisateur local non disponible."
+)
 
 
+@requires_user_sample
 def test_real_replay_metadata_players_and_deck() -> None:
     context = parse_replay_data(SAMPLE.read_bytes(), source_label=SAMPLE.name)
     facts = extract_replay_facts(context)
@@ -27,6 +31,7 @@ def test_real_replay_metadata_players_and_deck() -> None:
     assert not facts.opponent.deck
 
 
+@requires_user_sample
 def test_private_player_attributes_never_enter_structural_models() -> None:
     facts = extract_replay_facts(parse_replay_data(SAMPLE.read_bytes()))
     serialized_repr = repr((facts.player, facts.opponent))
@@ -41,15 +46,21 @@ def test_hsreplay_without_game_is_rejected() -> None:
         parse_replay_data(b'<HSReplay build="1" version="1.7"/>')
 
 
+@requires_user_sample
 def test_real_replay_builds_integrated_timeline_states_and_options() -> None:
     analysis = analyze_replay_data(SAMPLE.read_bytes(), {}, source_label=SAMPLE.name)
 
-    assert analysis.schema_version == "1.0"
+    assert analysis.schema_version == "2.0"
     assert len(analysis.turns) == 12
     assert analysis.turns[0].active_player is PlayerSide.PLAYER
-    assert all(turn.start_state is not None for turn in analysis.turns)
-    assert all(turn.end_state is not None for turn in analysis.turns)
+    assert all(turn.turn_start_state is not None for turn in analysis.turns)
+    assert all(turn.action_phase_start_state is not None for turn in analysis.turns)
+    assert all(turn.action_phase_end_state is not None for turn in analysis.turns[:-1])
+    assert all(turn.turn_end_state is not None for turn in analysis.turns[:-1])
+    assert analysis.turns[-1].action_phase_end_state is None
+    assert analysis.turns[-1].turn_end_state is None
     assert sum(len(turn.decisions) for turn in analysis.turns) == 25
     assert analysis.diagnostics.has_player_deck is True
     assert analysis.diagnostics.has_mulligan is True
     assert analysis.diagnostics.has_options is True
+    assert analysis.diagnostics.game_state_completeness == "partial"

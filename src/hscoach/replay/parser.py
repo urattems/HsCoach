@@ -18,10 +18,13 @@ from hscoach.cards.localization import card_class_fr, format_fr, game_type_fr
 from hscoach.exceptions import ReplayParseError
 from hscoach.input import validate_replay_xml
 from hscoach.models import (
+    ActionType,
     Card,
     CardRef,
     DeckCard,
+    GameAction,
     GameAnalysis,
+    KnowledgeStatus,
     Player,
     PlayerSide,
     ReplayDiagnostics,
@@ -152,6 +155,7 @@ def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
     """Assembler cartes, mulligan, chronologie, états et options d'un contexte validé."""
 
     # Imports locaux : ces modules spécialisés dépendent du ReplayContext public.
+    from hscoach.replay.deltas import build_turn_state_deltas
     from hscoach.replay.gamestate import capture_turn_snapshots
     from hscoach.replay.mulligan import extract_mulligan
     from hscoach.replay.options import extract_decisions
@@ -171,30 +175,45 @@ def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
         player_entity_id=facts.player.entity_id,
         opponent_entity_id=facts.opponent.entity_id,
     )
-    snapshots = capture_turn_snapshots(
+    snapshot_result = capture_turn_snapshots(
         facts.context,
         resolver,
         friendly_player_id=facts.player.player_id,
     )
-    decisions = extract_decisions(facts.context, resolver)
+    decisions = extract_decisions(
+        facts.context,
+        resolver,
+        player_entity_id=facts.player.entity_id,
+        opponent_entity_id=facts.opponent.entity_id,
+    )
 
     turns_by_number = {turn.turn_number: turn for turn in timeline.turns}
-    for snapshot in snapshots:
+    for snapshot in snapshot_result:
         turn = turns_by_number.get(snapshot.turn_number)
         if turn is None:
             continue
-        turn.start_state = snapshot.start_state
-        turn.end_state = snapshot.end_state
+        turn.turn_start_state = snapshot.turn_start_state
+        turn.action_phase_start_state = snapshot.action_phase_start_state
+        turn.action_phase_end_state = snapshot.action_phase_end_state
+        turn.turn_end_state = snapshot.turn_end_state
+        turn.state_deltas = build_turn_state_deltas(turn)
     for turn_number, items in decisions.by_turn.items():
         turn = turns_by_number.get(turn_number)
         if turn is not None:
             turn.decisions.extend(items)
+    for turn_number, items in decisions.choices_by_turn.items():
+        turn = turns_by_number.get(turn_number)
+        if turn is not None:
+            turn.choices.extend(items)
+            _attach_choice_actions(turn, items)
+    _normalize_action_sequences(timeline.start_of_game_events, timeline.turns)
 
     unresolved_ids = list(resolver.unresolved_ids)
     warnings = [
         *facts.context.warnings,
         *mulligan_result.warnings,
         *timeline.warnings,
+        *snapshot_result.warnings,
         *[
             ParseWarning(
                 code="carte_non_resolue",
@@ -209,6 +228,29 @@ def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
     event_count = len(timeline.start_of_game_events) + sum(
         len(turn.actions) for turn in timeline.turns
     )
+    actions = [action for turn in timeline.turns for action in turn.actions]
+    phase_deltas = [delta for turn in timeline.turns for delta in turn.state_deltas]
+    state_delta_count = sum(
+        len(delta.entities) + len(delta.heroes) + len(delta.mana) + len(delta.zones)
+        for delta in phase_deltas
+    )
+    available_boundaries = sum(
+        state is not None
+        for turn in timeline.turns
+        for state in (
+            turn.turn_start_state,
+            turn.action_phase_start_state,
+            turn.action_phase_end_state,
+            turn.turn_end_state,
+        )
+    )
+    expected_boundaries = len(timeline.turns) * 4
+    if available_boundaries == 0:
+        completeness = "unknown"
+    elif available_boundaries == expected_boundaries:
+        completeness = "complete"
+    else:
+        completeness = "partial"
     diagnostics = ReplayDiagnostics(
         valid=True,
         entity_count=_entity_count(facts.context.game_xml),
@@ -217,8 +259,23 @@ def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
         resolved_card_count=max(0, len(entity_card_ids) - unresolved_occurrences),
         unresolved_card_count=unresolved_occurrences,
         has_player_deck=bool(player.deck),
-        has_mulligan=bool(mulligan_result.mulligan.offered),
+        has_mulligan=mulligan_result.mulligan.status is not KnowledgeStatus.UNKNOWN,
         has_options=decisions.count > 0,
+        player_class=player.card_class,
+        opponent_class=opponent.card_class,
+        action_count=len(actions),
+        state_delta_count=state_delta_count
+        + sum(len(turn.entity_deltas) for turn in timeline.turns),
+        buff_count=sum(action.action_type is ActionType.BUFF for action in actions),
+        damage_count=sum(action.action_type is ActionType.DAMAGE for action in actions),
+        heal_count=sum(action.action_type is ActionType.HEAL for action in actions),
+        created_card_count=sum(action.action_type is ActionType.CREATE_CARD for action in actions),
+        option_count=decisions.option_count,
+        unknown_action_count=sum(
+            action.action_type is ActionType.UNCLASSIFIED for action in actions
+        ),
+        mulligan_status=mulligan_result.mulligan.status,
+        game_state_completeness=completeness,
     )
     return GameAnalysis(
         metadata=facts.metadata,
@@ -232,6 +289,66 @@ def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
         warnings=warnings,
         diagnostics=diagnostics,
     )
+
+
+def _attach_choice_actions(turn: object, choices: list[object]) -> None:
+    for choice in choices:
+        action_type = (
+            ActionType.DISCOVER if choice.choice_type == "Découverte" else ActionType.CHOICE
+        )
+        chosen_names = ", ".join(card.name for card in choice.chosen)
+        if chosen_names:
+            description = f"{choice.choice_type} : {chosen_names} est choisi."
+        elif choice.completed:
+            description = f"{choice.choice_type} terminé sans entité choisie explicite."
+        else:
+            description = f"{choice.choice_type} proposé ; réponse absente du replay."
+        turn.actions.append(
+            GameAction(
+                sequence=0,
+                action_type=action_type,
+                player=choice.player,
+                description=description,
+                timestamp=choice.timestamp,
+                source_card=choice.source_card,
+                target_card=choice.chosen[0] if len(choice.chosen) == 1 else None,
+                metadata={
+                    "choice_type": choice.choice_type,
+                    "offered_entity_ids": [card.entity_id for card in choice.offered],
+                    "chosen_entity_ids": [card.entity_id for card in choice.chosen],
+                    "completed": choice.completed,
+                },
+            )
+        )
+
+
+def _normalize_action_sequences(start_events: list[GameAction], turns: list[object]) -> None:
+    """Renuméroter après fusion XML ciblée, sans ordre aléatoire."""
+
+    sequence = 0
+    for action in sorted(start_events, key=lambda item: item.sequence):
+        sequence += 1
+        action.sequence = sequence
+    for turn in turns:
+        original_order = {id(action): index for index, action in enumerate(turn.actions)}
+        original_sequences = {id(action): action.sequence for action in turn.actions}
+        turn.actions.sort(
+            key=lambda action: (
+                action.timestamp is not None,
+                action.timestamp or "",
+                original_order[id(action)],
+            )
+        )
+        sequence_mapping: dict[int, int] = {}
+        for action in turn.actions:
+            sequence += 1
+            old_sequence = original_sequences[id(action)]
+            if old_sequence > 0:
+                sequence_mapping[old_sequence] = sequence
+            action.sequence = sequence
+        for delta in turn.entity_deltas:
+            if delta.sequence in sequence_mapping:
+                delta.sequence = sequence_mapping[delta.sequence]
 
 
 def _player_model(raw: RawPlayer, side: PlayerSide, resolver: object) -> Player:

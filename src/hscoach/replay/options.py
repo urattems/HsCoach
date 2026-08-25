@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from xml.etree import ElementTree
 
-from hearthstone.enums import CardType, GameTag, OptionType, Zone
+from hearthstone.enums import CardType, ChoiceType, GameTag, OptionType, Zone
 
-from hscoach.models.action import Decision, RecordedOption
+from hscoach.models.action import Decision, PlayerSide, RecordedChoice, RecordedOption
 from hscoach.models.card import Visibility
 from hscoach.replay.gamestate import CardReferenceResolver
 from hscoach.replay.parser import ReplayContext
@@ -18,10 +18,19 @@ class DecisionResult:
     """Décisions groupées par numéro de demi-tour protocolaire."""
 
     by_turn: dict[int, list[Decision]] = field(default_factory=dict)
+    choices_by_turn: dict[int, list[RecordedChoice]] = field(default_factory=dict)
 
     @property
     def count(self) -> int:
         return sum(len(items) for items in self.by_turn.values())
+
+    @property
+    def option_count(self) -> int:
+        return sum(len(decision.options) for items in self.by_turn.values() for decision in items)
+
+    @property
+    def choice_count(self) -> int:
+        return sum(len(items) for items in self.choices_by_turn.values())
 
 
 @dataclass(slots=True)
@@ -36,6 +45,9 @@ class _OptionEntity:
 def extract_decisions(
     context: ReplayContext,
     resolver: CardReferenceResolver,
+    *,
+    player_entity_id: int | None = None,
+    opponent_entity_id: int | None = None,
 ) -> DecisionResult:
     """Corréler chaque `Options` au `SendOption` suivant sans extrapolation stratégique."""
 
@@ -44,6 +56,8 @@ def extract_decisions(
     pending: tuple[int, Decision] | None = None
     turn_number = 0
     sequence = 0
+    choice_sequence = 0
+    pending_choices: dict[str, tuple[int, RecordedChoice]] = {}
     game_entity = context.game_xml.find("GameEntity")
     game_entity_id = game_entity.attrib.get("id") if game_entity is not None else "1"
 
@@ -60,6 +74,55 @@ def extract_decisions(
                 options=[_option(item, entities, resolver) for item in element.findall("Option")],
             )
             pending = (turn_number, decision)
+        elif element.tag == "Choices":
+            raw_choice_type = _integer(element.attrib.get("type"))
+            if raw_choice_type == int(ChoiceType.MULLIGAN):
+                continue
+            choice_id = element.attrib.get("id")
+            if not choice_id:
+                continue
+            choice_sequence += 1
+            source_entity_id = _integer(element.attrib.get("source"))
+            source_ref = _reference(entities.get(source_entity_id), resolver)
+            choice = RecordedChoice(
+                sequence=choice_sequence,
+                timestamp=element.attrib.get("ts"),
+                choice_type=_choice_type(raw_choice_type, source_ref),
+                player=_choice_side(
+                    _integer(element.attrib.get("entity")),
+                    player_entity_id,
+                    opponent_entity_id,
+                ),
+                offered=[
+                    ref
+                    for item in element.findall("Choice")
+                    if (
+                        ref := _reference(
+                            entities.get(_integer(item.attrib.get("entity"))), resolver
+                        )
+                    )
+                    is not None
+                ],
+                source_card=source_ref,
+            )
+            pending_choices[choice_id] = (turn_number, choice)
+        elif element.tag in {"SendChoices", "ChosenEntities"}:
+            choice_id = element.attrib.get("id")
+            pending_choice = pending_choices.get(choice_id or "")
+            if pending_choice is None:
+                continue
+            choice = pending_choice[1]
+            chosen = [
+                ref
+                for item in element.findall("Choice")
+                if (ref := _reference(entities.get(_integer(item.attrib.get("entity"))), resolver))
+                is not None
+            ]
+            if chosen:
+                choice.chosen = chosen
+            choice.completed = True
+            if choice not in result.choices_by_turn.get(pending_choice[0], []):
+                result.choices_by_turn.setdefault(pending_choice[0], []).append(choice)
         elif element.tag == "SendOption" and pending is not None:
             selected_index = _integer(element.attrib.get("option"))
             decision = pending[1]
@@ -74,6 +137,9 @@ def extract_decisions(
 
     if pending is not None:
         result.by_turn.setdefault(pending[0], []).append(pending[1])
+    for turn, choice in pending_choices.values():
+        if choice not in result.choices_by_turn.get(turn, []):
+            result.choices_by_turn.setdefault(turn, []).append(choice)
     return result
 
 
@@ -100,6 +166,7 @@ def _option(
         entity=ref,
         targets=targets,
         error=element.attrib.get("error"),
+        available=element.attrib.get("error") is None,
     )
 
 
@@ -187,6 +254,29 @@ def _option_type(raw_value: str | None) -> str:
     if value == int(OptionType.POWER):
         return "Action"
     return "Option non classifiée"
+
+
+def _choice_type(raw_value: int | None, source_ref: object | None) -> str:
+    mechanics = getattr(source_ref, "mechanics", ()) if source_ref is not None else ()
+    if "DISCOVER" in mechanics:
+        return "Découverte"
+    if raw_value == int(ChoiceType.TARGET):
+        return "Choix de cible"
+    if raw_value == int(ChoiceType.GENERAL):
+        return "Choix général"
+    return "Choix non classifié"
+
+
+def _choice_side(
+    entity_id: int | None,
+    player_entity_id: int | None,
+    opponent_entity_id: int | None,
+) -> PlayerSide:
+    if entity_id == player_entity_id:
+        return PlayerSide.PLAYER
+    if entity_id == opponent_entity_id:
+        return PlayerSide.OPPONENT
+    return PlayerSide.SYSTEM
 
 
 def _tag_number(element: ElementTree.Element) -> int | None:

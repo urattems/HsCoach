@@ -8,7 +8,7 @@ from xml.etree import ElementTree
 from hearthstone.enums import ChoiceType, GameTag, Step, Zone
 
 from hscoach.models.card import CardRef, InformationSource, Visibility
-from hscoach.models.game import Mulligan, ParseWarning
+from hscoach.models.game import KnowledgeStatus, Mulligan, ParseWarning
 from hscoach.replay.gamestate import CardReferenceResolver
 from hscoach.replay.parser import ReplayContext
 
@@ -94,7 +94,10 @@ def extract_mulligan(
             message="Aucun paquet de mulligan exploitable n’a été trouvé pour le joueur.",
         )
         return MulliganResult(
-            mulligan=Mulligan(partially_reconstructed=True),
+            mulligan=Mulligan(
+                status=KnowledgeStatus.UNKNOWN,
+                source=InformationSource.UNCERTAIN,
+            ),
             warnings=[warning],
         )
 
@@ -144,10 +147,22 @@ def extract_mulligan(
 
     mulligan = Mulligan(
         offered=offered,
-        kept=[_reference_entity(entities, resolver, entity_id) for entity_id in kept_ids],
-        returned=[_reference_entity(entities, resolver, entity_id) for entity_id in returned_ids],
-        received=[_reference_entity(entities, resolver, entity_id) for entity_id in received_ids],
-        partially_reconstructed=partially_reconstructed,
+        kept=(
+            None
+            if unresolved_ids
+            else [_reference_entity(entities, resolver, entity_id) for entity_id in kept_ids]
+        ),
+        returned=(
+            None
+            if unresolved_ids
+            else [_reference_entity(entities, resolver, entity_id) for entity_id in returned_ids]
+        ),
+        received=(
+            None
+            if unresolved_ids or len(candidate_ids) != len(returned_ids)
+            else [_reference_entity(entities, resolver, entity_id) for entity_id in received_ids]
+        ),
+        status=(KnowledgeStatus.PARTIAL if partially_reconstructed else KnowledgeStatus.KNOWN),
         source=(
             InformationSource.UNCERTAIN
             if partially_reconstructed

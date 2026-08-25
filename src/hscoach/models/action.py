@@ -17,6 +17,16 @@ class PlayerSide(StrEnum):
     SYSTEM = "SYSTEM"
 
 
+class TurnPhase(StrEnum):
+    """Frontière temporelle explicite d'un demi-tour."""
+
+    TURN_START = "turn_start"
+    ACTION_PHASE_START = "action_phase_start"
+    ACTION_PHASE_END = "action_phase_end"
+    TURN_END = "turn_end"
+    UNKNOWN = "unknown"
+
+
 class ActionType(StrEnum):
     """Types factuels traduits pour les sorties utilisateur."""
 
@@ -77,7 +87,22 @@ class RecordedOption:
     entity: CardRef | None = None
     targets: list[CardRef] = field(default_factory=list)
     error: str | None = None
+    available: bool = True
     selected: bool = False
+
+
+@dataclass(slots=True)
+class RecordedChoice:
+    """Choix protocolaire offert puis, si disponible, réponse enregistrée."""
+
+    sequence: int
+    timestamp: str | None
+    choice_type: str
+    player: PlayerSide
+    offered: list[CardRef] = field(default_factory=list)
+    chosen: list[CardRef] = field(default_factory=list)
+    source_card: CardRef | None = None
+    completed: bool = False
 
 
 @dataclass(slots=True)

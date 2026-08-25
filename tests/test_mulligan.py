@@ -1,15 +1,21 @@
 from pathlib import Path
 from xml.etree import ElementTree
 
+import pytest
 from hearthstone.enums import GameTag, Step, Zone
 
 from hscoach.cards.resolver import CardResolver
+from hscoach.models import KnowledgeStatus
 from hscoach.replay.mulligan import extract_mulligan
 from hscoach.replay.parser import ReplayContext, extract_replay_facts, parse_replay_data
 
 SAMPLE = Path(__file__).parents[1] / "samples" / "sample_replay.hsreplay"
+requires_user_sample = pytest.mark.skipif(
+    not SAMPLE.is_file(), reason="Replay utilisateur local non disponible."
+)
 
 
+@requires_user_sample
 def test_real_mulligan_does_not_invert_kept_and_returned_cards() -> None:
     context = parse_replay_data(SAMPLE.read_bytes())
     facts = extract_replay_facts(context)
@@ -33,9 +39,11 @@ def test_real_mulligan_does_not_invert_kept_and_returned_cards() -> None:
     assert result.mulligan.returned == []
     assert result.mulligan.received == []
     assert result.mulligan.partially_reconstructed is False
+    assert result.mulligan.status is KnowledgeStatus.KNOWN
     assert result.warnings == []
 
 
+@requires_user_sample
 def test_real_chosen_entities_are_confirmed_as_kept_by_zones() -> None:
     context = parse_replay_data(SAMPLE.read_bytes())
     facts = extract_replay_facts(context)
@@ -93,3 +101,30 @@ def test_returned_and_received_cards_follow_observed_zone_changes() -> None:
     assert [card.card_id for card in result.mulligan.returned] == ["RETURN"]
     assert [card.card_id for card in result.mulligan.received] == ["RECEIVE"]
     assert result.mulligan.partially_reconstructed is False
+    assert result.mulligan.status is KnowledgeStatus.KNOWN
+
+
+def test_absent_mulligan_uses_unknown_null_categories() -> None:
+    root = ElementTree.fromstring(
+        '<HSReplay version="1.7"><Game id="test"><Player id="2" playerID="1"/></Game></HSReplay>'
+    )
+    context = ReplayContext(
+        document=None,
+        packet_tree=None,
+        root=root,
+        game_xml=root.find("Game"),
+        source_label="test",
+    )
+
+    result = extract_mulligan(
+        context,
+        CardResolver({}),
+        player_entity_id=2,
+        player_id=1,
+    )
+
+    assert result.mulligan.status is KnowledgeStatus.UNKNOWN
+    assert result.mulligan.offered is None
+    assert result.mulligan.kept is None
+    assert result.mulligan.returned is None
+    assert result.mulligan.received is None

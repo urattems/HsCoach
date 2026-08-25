@@ -2,6 +2,7 @@ from hscoach.models import (
     ActionType,
     BoardState,
     CardRef,
+    Decision,
     DeckCard,
     GameAction,
     GameAnalysis,
@@ -10,6 +11,7 @@ from hscoach.models import (
     Mulligan,
     Player,
     PlayerSide,
+    RecordedOption,
     ReplayMetadata,
     SideState,
     TurnState,
@@ -86,13 +88,14 @@ def analysis_fixture() -> GameAnalysis:
             player_id=2,
             card_class="Paladin",
         ),
-        mulligan=Mulligan(offered=[maiev], kept=[maiev]),
+        mulligan=Mulligan(offered=[maiev], kept=[maiev], returned=[], received=[]),
         turns=[
             TurnState(
                 turn_number=7,
                 round_number=4,
                 active_player=PlayerSide.PLAYER,
-                start_state=start,
+                turn_start_state=start,
+                action_phase_start_state=start,
                 actions=[
                     GameAction(
                         sequence=1,
@@ -108,7 +111,8 @@ def analysis_fixture() -> GameAnalysis:
                         target_card=technical_enchantment,
                     ),
                 ],
-                end_state=end,
+                action_phase_end_state=end,
+                turn_end_state=end,
             )
         ],
     )
@@ -121,6 +125,8 @@ def test_markdown_contains_french_sections_and_current_stats() -> None:
     assert "Joueur : Chaman" in report
     assert "Adversaire : Paladin" in report
     assert "## Tour 4 — JOUEUR" in report
+    assert "### Au moment de décider" in report
+    assert "### Après les déclenchements de fin de tour" in report
     assert "Maiev la Gardienne — 1/7" in report
     assert "1 carte inconnue" in report
     assert "Warden Maiev" not in report
@@ -134,6 +140,7 @@ def test_markdown_groups_deck_and_states_limits() -> None:
     assert "2× Maiev la Gardienne" in report
     assert "Deck adverse complet : inconnu." in report
     assert "n’est pas extrapolé" in report
+    assert "- Aucune." in report
     assert report.endswith("\n")
 
 
@@ -147,3 +154,45 @@ def test_markdown_export_uses_safe_game_directory(tmp_path) -> None:
     assert destination.name == "game_summary.md"
     assert destination.read_text(encoding="utf-8").startswith("# Replay Hearthstone")
     assert not (tmp_path.parent / "ailleurs").exists()
+
+
+def test_markdown_hides_invalid_end_turn_marker_and_labels_option_availability() -> None:
+    analysis = analysis_fixture()
+    analysis.turns[0].decisions = [
+        Decision(
+            sequence=1,
+            timestamp=None,
+            selected_option_index=2,
+            options=[
+                RecordedOption(
+                    index=0,
+                    option_type="Fin du tour",
+                    description="Terminer le tour",
+                    error="INVALID",
+                    available=False,
+                ),
+                RecordedOption(
+                    index=1,
+                    option_type="Action",
+                    description="Jouer une carte",
+                    available=True,
+                ),
+                RecordedOption(
+                    index=2,
+                    option_type="Action",
+                    description="Utiliser le pouvoir",
+                    error="REQ_ENOUGH_MANA",
+                    available=False,
+                    selected=True,
+                ),
+            ],
+        )
+    ]
+
+    report = render_markdown(analysis)
+
+    assert "Action choisie : Utiliser le pouvoir" in report
+    assert "Option disponible : Jouer une carte" in report
+    assert "Terminer le tour" not in report
+    assert "INVALID" not in report
+    assert "REQ_ENOUGH_MANA" not in report

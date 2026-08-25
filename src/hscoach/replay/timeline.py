@@ -22,10 +22,10 @@ from hslog.packets import (
     TagChange,
 )
 
-from hscoach.models.action import ActionType, GameAction, PlayerSide
+from hscoach.models.action import ActionType, GameAction, PlayerSide, TurnPhase
 from hscoach.models.card import CardRef, InformationSource, Visibility
 from hscoach.models.game import ParseWarning
-from hscoach.models.state import TurnState
+from hscoach.models.state import EntityDelta, TurnState, ValueDelta
 from hscoach.replay.parser import ReplayContext
 
 
@@ -82,6 +82,16 @@ class _EntityState:
         return value if value else None
 
 
+@dataclass(slots=True, frozen=True)
+class _BlockContext:
+    """Contexte causal uniquement quand le protocole porte une cible explicite."""
+
+    block_type: BlockType
+    entity_id: int | None
+    target_id: int | None
+    sequence: int | None
+
+
 _IMPORTANT_ACTIONS = {
     ActionType.CREATE_CARD,
     ActionType.DEATH,
@@ -119,6 +129,8 @@ class _TimelineBuilder:
         self.deaths_emitted = 0
         self.death_depth = 0
         self.last_timestamp = context.game_xml.attrib.get("ts")
+        self.current_phase = TurnPhase.UNKNOWN
+        self.block_stack: list[_BlockContext] = []
 
     def build(self) -> TimelineResult:
         packets = list(self.context.packet_tree)
@@ -135,6 +147,7 @@ class _TimelineBuilder:
 
         for turn in self.turns:
             turn.actions.sort(key=lambda action: action.sequence)
+            turn.entity_deltas.sort(key=lambda delta: delta.sequence)
         self.start_events.sort(key=lambda action: action.sequence)
         self.important_events.sort(key=lambda action: action.sequence)
         card_ids = {
@@ -206,12 +219,18 @@ class _TimelineBuilder:
         block_type = _enum_or_default(BlockType, block.type, BlockType.INVALID)
         timestamp = _timestamp(block) or self.last_timestamp
         destination = self.current_turn
+        entity_id = _entity_id(block.entity)
+        target_id = _entity_id(block.target)
 
         if block_type is BlockType.DEATHS:
             previous_count = self.deaths_emitted
             self.death_depth += 1
-            for child in block.packets:
-                self._visit(child)
+            self.block_stack.append(_BlockContext(block_type, entity_id, target_id, sequence=None))
+            try:
+                for child in block.packets:
+                    self._visit(child)
+            finally:
+                self.block_stack.pop()
             self.death_depth -= 1
             if self.deaths_emitted == previous_count:
                 self._emit(
@@ -235,11 +254,13 @@ class _TimelineBuilder:
             }
             else None
         )
-        for child in block.packets:
-            self._visit(child)
+        self.block_stack.append(_BlockContext(block_type, entity_id, target_id, sequence))
+        try:
+            for child in block.packets:
+                self._visit(child)
+        finally:
+            self.block_stack.pop()
 
-        entity_id = _entity_id(block.entity)
-        target_id = _entity_id(block.target)
         state = self.entities.get(entity_id) if entity_id is not None else None
         side = self._side_for_entity(entity_id)
 
@@ -290,6 +311,22 @@ class _TimelineBuilder:
                 f"{source.name} attaque {target.name}.",
                 timestamp=timestamp,
                 source_card=source,
+                target_card=target,
+                metadata={
+                    "block_type": block_type.name,
+                    "entity_id": entity_id,
+                    "target_entity_id": target_id,
+                },
+                destination=destination,
+                sequence=sequence,
+            )
+        elif block_type is BlockType.FATIGUE:
+            target = self._reference(target_id or entity_id)
+            self._emit(
+                ActionType.FATIGUE,
+                self._side_for_entity(target_id or entity_id),
+                f"{target.name} subit la fatigue.",
+                timestamp=timestamp,
                 target_card=target,
                 metadata={
                     "block_type": block_type.name,
@@ -431,6 +468,7 @@ class _TimelineBuilder:
             return
         state = self.entities.setdefault(entity_id, _EntityState(entity_id))
         previous_zone = state.zone
+        previous_value = state.tags.get(tag)
         state.tags[tag] = int(packet.value)
 
         if tag is GameTag.CURRENT_PLAYER:
@@ -456,6 +494,7 @@ class _TimelineBuilder:
             }:
                 self._start_turn(self.pending_first_turn)
                 self.pending_first_turn = None
+            self._update_phase(packet.value)
             if packet.value == Step.MAIN_END:
                 self._emit_explicit_end_turn()
         elif tag is GameTag.ZONE:
@@ -464,6 +503,26 @@ class _TimelineBuilder:
             self._emit_creation_if_needed(state)
         elif tag is GameTag.PLAYSTATE:
             self._emit_playstate(entity_id, int(packet.value))
+
+        if self.current_turn is not None and tag in {
+            GameTag.DAMAGE,
+            GameTag.ATK,
+            GameTag.HEALTH,
+            GameTag.SILENCED,
+        }:
+            self._record_stat_change(state, tag, previous_value, int(packet.value))
+
+    def _update_phase(self, raw_step: object) -> None:
+        step = _enum_or_default(Step, raw_step, Step.INVALID)
+        if step is Step.MAIN_READY:
+            # Les changements suivants seront visibles à l'ouverture des actions.
+            self.current_phase = TurnPhase.ACTION_PHASE_START
+        elif step is Step.MAIN_ACTION:
+            self.current_phase = TurnPhase.ACTION_PHASE_END
+        elif step is Step.MAIN_END:
+            self.current_phase = TurnPhase.TURN_END
+        elif step in {Step.MAIN_CLEANUP, Step.MAIN_NEXT, Step.FINAL_WRAPUP}:
+            self.current_phase = TurnPhase.UNKNOWN
 
     def _start_turn(self, turn_number: int) -> None:
         self._finish_current_turn()
@@ -493,6 +552,7 @@ class _TimelineBuilder:
         """Fermer le conteneur sans inventer un événement de fin de tour."""
 
         self.current_turn = None
+        self.current_phase = TurnPhase.UNKNOWN
 
     def _emit_explicit_end_turn(self) -> None:
         if self.current_turn is None:
@@ -551,7 +611,66 @@ class _TimelineBuilder:
                         "to_zone": current_zone.name,
                     },
                 )
-        elif current_zone is Zone.GRAVEYARD and self.death_depth:
+        elif (
+            current_zone is Zone.PLAY
+            and previous_zone is not Zone.PLAY
+            and state.card_type is CardType.MINION
+            and self.current_turn is not None
+        ):
+            source = self._explicit_source_for_target(state.entity_id)
+            metadata: dict[str, object] = {
+                "entity_id": state.entity_id,
+                "from_zone": previous_zone.name,
+                "to_zone": current_zone.name,
+            }
+            if source is not None:
+                metadata["source_explicit"] = True
+            self._emit(
+                ActionType.SUMMON,
+                side,
+                f"{card.name} est invoqué.",
+                source_card=source,
+                target_card=card,
+                metadata=metadata,
+            )
+        elif (
+            current_zone is Zone.DECK
+            and previous_zone not in {Zone.INVALID, Zone.DECK}
+            and self.current_turn is not None
+        ):
+            self._emit(
+                ActionType.SHUFFLE_INTO_DECK,
+                side,
+                f"{card.name} est mélangée dans le deck {_possessive_side(side)}.",
+                target_card=card,
+                metadata={
+                    "entity_id": state.entity_id,
+                    "from_zone": previous_zone.name,
+                    "to_zone": current_zone.name,
+                },
+            )
+        elif (
+            current_zone is Zone.GRAVEYARD
+            and previous_zone is Zone.PLAY
+            and state.tags.get(GameTag.SECRET)
+            and self.current_turn is not None
+        ):
+            self._emit(
+                ActionType.REVEAL_SECRET,
+                side,
+                f"Le secret {card.name} est révélé.",
+                target_card=card,
+                metadata={
+                    "entity_id": state.entity_id,
+                    "from_zone": previous_zone.name,
+                    "to_zone": current_zone.name,
+                },
+            )
+        elif (
+            current_zone is Zone.GRAVEYARD
+            and previous_zone is Zone.PLAY
+            and (self.death_depth or state.card_type is CardType.MINION)
+        ):
             self.deaths_emitted += 1
             self._emit(
                 ActionType.DEATH,
@@ -565,6 +684,155 @@ class _TimelineBuilder:
                     "to_zone": current_zone.name,
                 },
             )
+
+    def _record_stat_change(
+        self,
+        state: _EntityState,
+        tag: GameTag,
+        previous_value: int | None,
+        current_value: int,
+    ) -> None:
+        if self.current_turn is None:
+            return
+        if tag is GameTag.DAMAGE and previous_value is None:
+            previous_value = 0
+        if previous_value is None or previous_value == current_value:
+            return
+
+        side = self._side_for_entity(state.entity_id)
+        target = self._reference(state.entity_id)
+        source = self._explicit_source_for_target(state.entity_id)
+        sequence = self._reserve_sequence()
+        attribute = tag.name.lower()
+        before: int | bool = previous_value
+        after: int | bool = current_value
+        action_type: ActionType | None = None
+        description: str | None = None
+        metadata: dict[str, object] = {
+            "entity_id": state.entity_id,
+            "tag": tag.name,
+            "before": previous_value,
+            "after": current_value,
+            "delta": current_value - previous_value,
+            "phase": self.current_phase.value,
+        }
+        if source is not None:
+            metadata["source_explicit"] = True
+
+        if tag is GameTag.DAMAGE:
+            maximum = state.tags.get(GameTag.HEALTH)
+            is_lethal_reset = (
+                current_value < previous_value
+                and maximum is not None
+                and previous_value >= maximum
+                and state.card_type is CardType.MINION
+            )
+            if maximum is not None:
+                if is_lethal_reset:
+                    before = previous_value
+                    after = current_value
+                    attribute = "damage_tag"
+                else:
+                    before = maximum - previous_value
+                    after = maximum - current_value
+                    attribute = "health"
+                metadata["damage_tag_before"] = previous_value
+                metadata["damage_tag_after"] = current_value
+            amount = abs(current_value - previous_value)
+            if current_value > previous_value:
+                action_type = ActionType.DAMAGE
+                description = (
+                    f"{target.name} subit {amount} point{'s' if amount != 1 else ''} de dégâts."
+                )
+            elif not is_lethal_reset:
+                action_type = ActionType.HEAL
+                description = (
+                    f"{target.name} récupère {amount} point{'s' if amount != 1 else ''} de vie."
+                )
+            else:
+                metadata["technical_lethal_damage_reset"] = True
+        elif tag in {GameTag.ATK, GameTag.HEALTH}:
+            if state.card_type not in {CardType.MINION, CardType.HERO}:
+                return
+            attack = state.tags.get(GameTag.ATK)
+            damage = state.tags.get(GameTag.DAMAGE, 0)
+            if tag is GameTag.ATK:
+                before_stats = (previous_value, (state.tags.get(GameTag.HEALTH) or 0) - damage)
+                after_stats = (current_value, (state.tags.get(GameTag.HEALTH) or 0) - damage)
+                attribute = "attack"
+            else:
+                before_stats = (attack, previous_value - damage)
+                after_stats = (attack, current_value - damage)
+                attribute = "max_health"
+            metadata["stats_before"] = _statline(before_stats)
+            metadata["stats_after"] = _statline(after_stats)
+            amount = abs(current_value - previous_value)
+            if current_value > previous_value:
+                action_type = ActionType.BUFF
+                description = (
+                    f"{target.name} passe de {metadata['stats_before']} à "
+                    f"{metadata['stats_after']}."
+                )
+            else:
+                action_type = ActionType.DEBUFF
+                description = (
+                    f"{target.name} passe de {metadata['stats_before']} à "
+                    f"{metadata['stats_after']}."
+                )
+            metadata["amount"] = amount
+        elif tag is GameTag.SILENCED and current_value:
+            before = bool(previous_value)
+            after = True
+            attribute = "silenced"
+            action_type = ActionType.SILENCE
+            description = f"{target.name} est réduit au silence."
+
+        self.current_turn.entity_deltas.append(
+            EntityDelta(
+                sequence=sequence,
+                entity_id=state.entity_id,
+                side=side,
+                phase=self.current_phase,
+                attribute=attribute,
+                value=ValueDelta(
+                    before=before,
+                    after=after,
+                    delta=(after - before)
+                    if isinstance(before, int)
+                    and not isinstance(before, bool)
+                    and isinstance(after, int)
+                    and not isinstance(after, bool)
+                    else None,
+                ),
+                card=target,
+                source_card=source,
+                metadata={
+                    key: value
+                    for key, value in metadata.items()
+                    if isinstance(value, (str, int, bool)) or value is None
+                },
+            )
+        )
+        if action_type is not None and description is not None:
+            self._emit(
+                action_type,
+                side,
+                description,
+                source_card=source,
+                target_card=target,
+                metadata=metadata,
+                sequence=sequence,
+            )
+
+    def _explicit_source_for_target(self, target_id: int) -> CardRef | None:
+        for context in reversed(self.block_stack):
+            if (
+                context.target_id == target_id
+                and context.entity_id is not None
+                and context.entity_id != target_id
+            ):
+                return self._reference(context.entity_id)
+        return None
 
     def _emit_creation_if_needed(self, state: _EntityState) -> None:
         if state.creation_emitted or state.creator is None:
@@ -780,3 +1048,8 @@ def _possessive_side(side: PlayerSide) -> str:
     if side is PlayerSide.OPPONENT:
         return "de l’ADVERSAIRE"
     return "du SYSTÈME"
+
+
+def _statline(values: tuple[int | None, int | None]) -> str:
+    attack, health = values
+    return f"{'?' if attack is None else attack}/{'?' if health is None else health}"

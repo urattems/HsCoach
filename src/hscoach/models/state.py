@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from hscoach.models.action import Decision, GameAction, PlayerSide
+from hscoach.models.action import (
+    Decision,
+    GameAction,
+    PlayerSide,
+    RecordedChoice,
+    TurnPhase,
+)
 from hscoach.models.card import CardRef, InformationSource
 
 
@@ -59,13 +65,98 @@ class BoardState:
 
 
 @dataclass(slots=True)
+class ValueDelta:
+    """Valeur objective avant/après et différence numérique si calculable."""
+
+    before: int | str | bool | None
+    after: int | str | bool | None
+    delta: int | None = None
+
+
+@dataclass(slots=True)
+class EntityDelta:
+    """Modification atomique observée sur une entité."""
+
+    sequence: int
+    entity_id: int
+    side: PlayerSide
+    phase: TurnPhase
+    attribute: str
+    value: ValueDelta
+    card: CardRef | None = None
+    source_card: CardRef | None = None
+    information_source: InformationSource = InformationSource.REPLAY_EXPLICIT
+    metadata: dict[str, int | str | bool | None] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class HeroDelta:
+    """Différences agrégées de santé, armure ou attaque d'un héros."""
+
+    side: PlayerSide
+    health: ValueDelta | None = None
+    armor: ValueDelta | None = None
+    attack: ValueDelta | None = None
+
+
+@dataclass(slots=True)
+class ManaDelta:
+    """Différences de ressources d'un côté entre deux frontières."""
+
+    side: PlayerSide
+    available: ValueDelta | None = None
+    used: ValueDelta | None = None
+
+
+@dataclass(slots=True)
+class ZoneDelta:
+    """Déplacement objectif d'une entité entre deux zones visibles."""
+
+    entity_id: int
+    side: PlayerSide
+    from_zone: str
+    to_zone: str
+    card: CardRef | None = None
+
+
+@dataclass(slots=True)
+class StateDelta:
+    """Différence structurée entre deux snapshots temporels."""
+
+    from_phase: TurnPhase
+    to_phase: TurnPhase
+    entities: list[EntityDelta] = field(default_factory=list)
+    heroes: list[HeroDelta] = field(default_factory=list)
+    mana: list[ManaDelta] = field(default_factory=list)
+    zones: list[ZoneDelta] = field(default_factory=list)
+    complete: bool = True
+
+
+@dataclass(slots=True)
 class TurnState:
     """État et événements d'un demi-tour joueur."""
 
     turn_number: int
     round_number: int
     active_player: PlayerSide
-    start_state: BoardState | None = None
+    turn_start_state: BoardState | None = None
+    action_phase_start_state: BoardState | None = None
     actions: list[GameAction] = field(default_factory=list)
     decisions: list[Decision] = field(default_factory=list)
-    end_state: BoardState | None = None
+    choices: list[RecordedChoice] = field(default_factory=list)
+    entity_deltas: list[EntityDelta] = field(default_factory=list)
+    state_deltas: list[StateDelta] = field(default_factory=list)
+    action_phase_end_state: BoardState | None = None
+    turn_end_state: BoardState | None = None
+
+    @property
+    def start_state(self) -> BoardState | None:
+        """Alias Python V1 : l'état de décision, anciennement nommé `start_state`."""
+
+        return self.action_phase_start_state
+
+    @property
+    def end_state(self) -> BoardState | None:
+        """Alias Python V1 : la fin de phase d'action, anciennement `end_state`."""
+
+        return self.action_phase_end_state

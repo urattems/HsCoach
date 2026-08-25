@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from hscoach.models.action import GameAction, PlayerSide
 from hscoach.models.card import CardRef, DeckCard, InformationSource
@@ -47,16 +48,36 @@ class Player:
     known_cards: list[CardRef] = field(default_factory=list)
 
 
+class KnowledgeStatus(StrEnum):
+    """Niveau de connaissance factuelle d'une section reconstruite."""
+
+    KNOWN = "known"
+    PARTIAL = "partial"
+    UNKNOWN = "unknown"
+
+
 @dataclass(slots=True)
 class Mulligan:
     """Mulligan du joueur, avec distinction explicite des incertitudes."""
 
-    offered: list[CardRef] = field(default_factory=list)
-    kept: list[CardRef] = field(default_factory=list)
-    returned: list[CardRef] = field(default_factory=list)
-    received: list[CardRef] = field(default_factory=list)
-    partially_reconstructed: bool = False
+    offered: list[CardRef] | None = None
+    kept: list[CardRef] | None = None
+    returned: list[CardRef] | None = None
+    received: list[CardRef] | None = None
+    status: KnowledgeStatus = KnowledgeStatus.UNKNOWN
     source: InformationSource = InformationSource.REPLAY_EXPLICIT
+
+    def __post_init__(self) -> None:
+        if self.status is KnowledgeStatus.UNKNOWN and any(
+            value is not None for value in (self.offered, self.kept, self.returned, self.received)
+        ):
+            self.status = KnowledgeStatus.KNOWN
+
+    @property
+    def partially_reconstructed(self) -> bool:
+        """Alias de lecture conservé pour les consommateurs Python V1."""
+
+        return self.status is KnowledgeStatus.PARTIAL
 
 
 @dataclass(slots=True)
@@ -72,11 +93,23 @@ class ReplayDiagnostics:
     has_player_deck: bool = False
     has_mulligan: bool = False
     has_options: bool = False
+    player_class: str = "Classe inconnue"
+    opponent_class: str = "Classe inconnue"
+    action_count: int = 0
+    state_delta_count: int = 0
+    buff_count: int = 0
+    damage_count: int = 0
+    heal_count: int = 0
+    created_card_count: int = 0
+    option_count: int = 0
+    unknown_action_count: int = 0
+    mulligan_status: KnowledgeStatus = KnowledgeStatus.UNKNOWN
+    game_state_completeness: str = "unknown"
 
 
 @dataclass(slots=True)
 class GameAnalysis:
-    """Agrégat complet exporté avec le schéma JSON 1.0."""
+    """Agrégat complet exporté avec le schéma JSON 2.0."""
 
     metadata: ReplayMetadata
     player: Player
@@ -88,4 +121,4 @@ class GameAnalysis:
     unresolved_cards: list[str] = field(default_factory=list)
     warnings: list[ParseWarning] = field(default_factory=list)
     diagnostics: ReplayDiagnostics = field(default_factory=ReplayDiagnostics)
-    schema_version: str = "1.0"
+    schema_version: str = "2.0"
