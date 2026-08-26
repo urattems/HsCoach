@@ -1,19 +1,20 @@
-# Hearthstone Replay Analyzer — règles de travail V2
+# Hearthstone Replay Analyzer — règles de travail V3
 
 Ce fichier est la mémoire exécutable du projet. Le relire intégralement avant toute
 modification et le maintenir cohérent avec le comportement réellement testé.
 
 ## Mission
 
-`hscoach` transforme un replay HSReplay XML local ou distant en trois exports
-factuels, anonymisés et en français :
+`hscoach` transforme un replay HSReplay XML local ou distant en exports factuels,
+anonymisés et en français :
 
 1. `game_summary.md`, destiné à une lecture humaine ;
 2. `game_analysis.json`, document exhaustif au schéma `2.0` ;
 3. `game_llm.json`, document compact au schéma indépendant `hscoach-llm/1.0`.
 
-Le flux reste séparé : chargement sécurisé, parsing officiel, résolution frFR,
-reconstruction factuelle, anonymisation, puis rendu. La V2 n'est ni un coach
+Le flux reste séparé : résolution de source, chargement sécurisé, parsing officiel,
+résolution frFR, reconstruction factuelle, anonymisation, puis rendu. La V3 propose une
+CLI et une GUI PySide6 qui appellent le même `AnalysisService`. Elle n'est ni un coach
 stratégique, ni un moteur de simulation, ni un système de notation des plays.
 
 ## Invariant temporel prioritaire
@@ -66,6 +67,50 @@ arme, pouvoir héroïque, invocation, attaque, dégâts, soins, mort, buff, debu
 silence, création, transformation, mélange, secret, fatigue et choix. Étendre cette
 liste à partir d'une fixture prouvant la sémantique, jamais par supposition.
 
+## Sémantique V3 : provenance, création et Dormant
+
+Une relation `GameTag.CREATOR` décrit d'abord la provenance historique d'une entité.
+Elle ne prouve pas qu'une création vient de se produire au paquet courant.
+
+- Exporter la relation dans `provenance` avec l'identifiant de l'entité créatrice, son
+  Card ID connu et une confiance factuelle.
+- Ne produire `CARD_CREATED` que lorsqu'une entrée/création est réellement observée
+  dans la timeline à cet instant.
+- Une révélation tardive de `CREATOR` enrichit la provenance sans ajouter un faux
+  événement tardif.
+- Ne pas dire « créée par Carte inconnue » lorsqu'aucun événement de création n'est
+  prouvé.
+
+Le statut Dormant doit être explicite dans les états d'entité/minion. Utiliser les
+`GameTag` réellement disponibles (`DORMANT`, `DORMANT_VISUAL` et transitions associées)
+et les changements de zone, sans nombre magique.
+
+- Classer `BECOMES_DORMANT` et `AWAKENS` seulement lorsque la transition est observée.
+- Pendant Dormant, une représentation temporaire des statistiques ne doit pas devenir
+  un faux debuff puis un faux buff.
+- Conserver tout vrai changement de statistiques, y compris un buff réellement reçu
+  avant ou pendant la période Dormante.
+- À l'éveil, restaurer la dernière valeur gameplay prouvée, pas une valeur supposée.
+
+Les tests minimaux couvrent provenance sans création instantanée, vraie création,
+révélation tardive, passage Dormant, réveil, buff + Dormant et la régression Maiev si le
+sample privé est présent.
+
+## Événements gameplay et entités techniques
+
+Le JSON exhaustif conserve les événements protocolaires. Les sorties gameplay peuvent
+regrouper plusieurs occurrences seulement lorsqu'elles décrivent le même trigger : même
+source entity, carte, type, cible éventuelle, fenêtre temporelle et données gameplay.
+Conserver alors `protocol_occurrences` pour l'audit. Ne jamais fusionner deux triggers
+réellement indépendants. En particulier, plusieurs paquets de démarrage décrivant
+l'effet unique de Commandante Beatrix ne doivent pas produire « 2× » dans le résumé.
+
+Les enchantements et helpers internes portent une classification `technical`. Ils
+restent disponibles dans `game_analysis.json`, mais sont exclus par défaut du Markdown,
+de `important_events` et du JSON LLM lorsqu'ils n'ajoutent aucune information utile.
+Le delta gameplay qu'ils provoquent reste visible, même si l'entité technique ne l'est
+pas.
+
 ## Mulligan, choix et options
 
 Le statut du mulligan vaut `known`, `partial` ou `unknown`.
@@ -115,6 +160,62 @@ Pour `Options` et `SendOption` :
   collectionnable. Conserver héros, pouvoirs, jetons et enchantements.
 - Nettoyer le HTML des textes et résoudre les Card IDs de manière centralisée.
 
+Les sources publiques sont des types explicites : `LocalReplaySource`,
+`DirectXmlUrlSource` et `HsReplayPageSource`. La détection syntaxique n'est pas le
+téléchargement. Elle doit notamment distinguer un chemin Windows d'une URL et comparer
+le hostname normalisé, jamais une sous-chaîne vulnérable telle que
+`hsreplay.net.example`.
+
+- Une URL directe est téléchargée puis validée comme XML HSReplay ; un HTTP 200 HTML
+  reste une erreur.
+- Une URL signée n'est affichée que sous une forme sans query string et n'est jamais
+  persistée.
+- Une page `https://hsreplay.net/replay/<ID>` est reconnue mais non résolue en V3.
+- Ne pas sonder d'endpoint privé, analyser le HTML, scraper le site ou contourner un
+  refus HTTP. Le resolver retourne le message français documenté.
+- Une future implémentation exige une API officielle/documentée ou une autorisation
+  explicite, et reste confinée au resolver.
+
+## Couche applicative commune
+
+`AnalysisService` constitue la seule façade métier pour la CLI, la GUI et un futur
+client machine. Il reçoit des `AnalysisRequest` et retourne des résultats par élément
+ainsi qu'un bilan de lot. La GUI ne doit jamais appeler directement `parser.py`,
+HearthstoneJSON, `gamestate.py` ou les renderers.
+
+```text
+CLI ─┐
+     ├──> AnalysisService ──> moteur hscoach
+GUI ─┘
+```
+
+- Continuer un lot après l'échec d'un élément.
+- N'écrire que les formats explicitement demandés ; préserver le comportement
+  historique de la CLI.
+- Signaler une progression par étapes réelles, jamais par un pourcentage inventé.
+- L'annulation empêche les travaux non commencés. Ne pas tuer brutalement un parseur
+  ou interrompre une écriture atomique.
+- Le service ne dépend d'aucune classe Qt et reste testable sans GUI.
+
+## GUI PySide6
+
+La GUI se lance avec `hscoach-gui` et `python -m hscoach.gui`. Elle doit rester simple,
+française, redimensionnable et utilisable au clavier.
+
+- Drag & drop et sélecteur acceptent un ou plusieurs replays, jamais une archive ou un
+  `game_llm.json` comme entrée.
+- Le travail réseau/parsing/export s'exécute hors du thread UI avec signaux Qt.
+- Le bouton Analyser est désactivé sans source ou dossier de sortie valide.
+- Par défaut : Markdown et JSON LLM actifs, JSON complet inactif.
+- `QSettings` conserve seulement dossier de sortie, cases d'export, ouverture après
+  analyse et éventuellement géométrie. Aucune source ou URL n'y est écrite.
+- Le premier dossier proposé est `Documents/HSCoach`; le cache GUI utilise le dossier
+  utilisateur renvoyé par `QStandardPaths.CacheLocation`.
+- Les logs en mémoire et messages utilisateur sont redacted et sans traceback. Le mode
+  diagnostic peut conserver une trace dans un emplacement utilisateur sûr.
+- Tester la logique avec pytest-qt plutôt que des pixels, et valider manuellement les
+  facteurs d'échelle Windows 125 % et 150 %.
+
 ## Contrats d'export et versionnage
 
 `game_analysis.json` suit le schéma `2.0`. La racine conserve :
@@ -129,6 +230,13 @@ Le remplacement de `start_state`/`end_state` par quatre frontières est incompat
 avec le schéma V1. Il justifie `schema_version = "2.0"` et la version de paquet
 `2.0.0`. Toute nouvelle rupture doit augmenter les deux versions concernées et ajouter
 un test de contrat.
+
+La V3 est une évolution additive du paquet en `2.1.0`. Elle conserve les identifiants
+de schéma `2.0` et `hscoach-llm/1.0` tant que leurs clés existantes gardent leur sens.
+Les nouveaux champs de provenance, Dormant, classification technique et occurrences
+protocolaires sont additifs ; la correction de `CARD_CREATED` retire une interprétation
+fausse sans transformer le contrat structurel. Si une clé est supprimée, renommée ou
+change de type, augmenter le schéma concerné avant la livraison.
 
 `game_llm.json` suit son propre schéma `hscoach-llm/1.0`, porté par le champ
 `schema_version`. Sa racine contient `game`, `cards`, `player_deck`, `mulligan`,
@@ -164,6 +272,12 @@ Considérer tout fichier et toute réponse HTTP comme non fiables.
 - Respecter le point de vue informationnel du joueur dans chaque snapshot.
 - Neutraliser le `game_id` et vérifier que tout chemin final reste sous le dossier de
   sortie autorisé.
+- Appliquer la garde finale uniquement aux rapports demandés mais avant toute première
+  écriture ; une option d'export désactivée ne doit créer aucun fichier.
+- Ne jamais placer une query string, une source ou une identité dans `QSettings`, un
+  tooltip, la liste GUI, le presse-papiers ou un log applicatif.
+- Ne jamais exécuter, extraire ou importer dynamiquement un fichier déposé. La limite de
+  taille s'applique aux entrées locales et distantes.
 
 Les replays bruts restent sensibles même si les rapports sont anonymisés.
 
@@ -201,6 +315,11 @@ python -m ruff format --check .
 Valeurs par défaut : `locale=frFR`, anonymisation active, 50 Mio, 20 secondes,
 sortie `output/`, cache `.cache/`.
 
+Ces chemins relatifs restent ceux de la CLI pour compatibilité. La GUI injecte un
+dossier initial `Documents/HSCoach` et un cache sous `QStandardPaths.CacheLocation`,
+afin qu'une application extraite ou placée près de `Program Files` n'écrive jamais à
+côté de son exécutable et ne demande aucune élévation.
+
 Le cache attendu est :
 
 ```text
@@ -224,6 +343,11 @@ et le menu français. Une analyse réussie doit annoncer les trois rapports. Une
 attendue ne doit apparaître qu'une fois en mode normal ; `--verbose` peut fournir une
 trace de diagnostic supplémentaire sans exposer de secret.
 
+Les handlers CLI passent par `AnalysisService`; ils ne reconstruisent pas un second
+pipeline. La CLI conserve par défaut ses trois exports historiques, même si la GUI
+propose Markdown + JSON LLM seulement. Une future commande machine doit réserver
+`stdout` au JSON et envoyer les logs sur `stderr`.
+
 Les diagnostics factuels couvrent classes joueur/adversaire, entités, événements,
 demi-tours, actions, deltas, buffs, dégâts, soins, créations, options, cartes inconnues,
 actions non classifiées, statut du mulligan et complétude des snapshots. Ne pas inventer
@@ -245,13 +369,55 @@ indisponible, jamais remplacé silencieusement.
 
 Ne pas implémenter sans mission distincte : scraping d'une page publique
 `hsreplay.net/replay/...`, OAuth HSReplay, analyse live ou massive de `Power.log`,
-surveillance de dossiers, GUI, application web, moteur de meilleur choix, simulation,
+surveillance de dossiers, application web, moteur de meilleur choix, simulation,
 notation de play ou prédiction de main adverse. Une URL HTTP(S) directe vers le XML
-reste prise en charge.
+reste prise en charge. La V3 inclut une GUI desktop, mais pas de serveur local, de
+service IA externe, d'overlay en jeu ni d'application Overwolf.
 
-## Definition of done V2
+## Packaging Windows et publication
 
-Une évolution V2 n'est livrable que si :
+Le build utilisateur se fait avec PyInstaller en mode one-folder sur Windows et produit
+`dist/HSCoach/HSCoach.exe`. PyInstaller n'est pas un cross-compilateur : ne jamais
+présenter un bundle produit sur Linux/macOS comme une Release Windows testée.
+
+- Le script `scripts/build_windows.ps1` utilise l'extra `.[gui,build]`, `--windowed`,
+  `--onedir`, `--noupx` et ne demande pas l'élévation UAC.
+- `hearthstone`, `hslog` et `hsreplay` importent encore `pkg_resources.require()` ; le
+  build doit copier explicitement leurs métadonnées de distribution.
+- Le smoke test crée réellement l'application Qt à partir du binaire final.
+- Le bundle inclut `LICENSE` et les notices nécessaires aux dépendances redistribuées,
+  notamment les textes GPLv3/LGPLv3 officiels requis pour l'option open source
+  Qt/PySide6. Il n'inclut jamais samples, sorties ou cache.
+- L'inclusion des textes ne certifie pas la conformité : tant que les DLL/plugins Qt,
+  leurs composants tiers, leurs notices et l'accès aux sources correspondantes n'ont
+  pas été audités pour le bundle exact, la publication publique du binaire est bloquée.
+- L'artefact CI est optionnel, manuel et non signé ; ne pas l'activer avant ce gate.
+- La Release est extraite dans un emplacement utilisateur. Sorties, cache et réglages
+  ne sont jamais écrits dans `Program Files`.
+- Un binaire non signé est annoncé comme tel ; signature de code et réputation
+  SmartScreen restent une limite distincte.
+- Construire une Release depuis un clone/une archive Git propre, jamais en zippant le
+  dossier de travail contenant des fichiers ignorés.
+
+Le dépôt public doit contenir une vraie licence MIT, un README factuel, une contribution
+guide, une matrice de tests manuels et aucune donnée utilisateur dans toute l'histoire
+Git pertinente. Ne pas inventer une URL de dépôt ou de Release si aucun remote n'est
+configuré.
+
+## Préparation Overwolf
+
+La V3 ne crée aucune app Overwolf. Une future façade utiliserait un process bridge vers
+un `hscoach-engine.exe` puis `AnalysisService`, sans recopier la logique métier. Ne pas
+ajouter Flask/FastAPI ou un port local pour cette hypothèse.
+
+Hearthstone (`9898`) figure depuis le 2026-08-10 dans la liste officielle des jeux GEP
+dépréciés. Ne construire aucune fonction nécessitant le Game Events Provider. Le futur
+client éventuel repose seulement sur replays, fichiers, logs explicitement supportés et
+URL. Garder `docs/OVERWOLF.md` aligné avec la documentation Overwolf courante.
+
+## Definition of done V3
+
+Une évolution V3 n'est livrable que si le socle V2 reste satisfait et si :
 
 - les quatre frontières gardent leur sens et toute absence est honnêtement exposée ;
 - les deltas sont objectifs, séquencés et sans attribution causale inventée ;
@@ -260,10 +426,21 @@ Une évolution V2 n'est livrable que si :
 - les trois rapports sont déterministes, atomiques et passent la garde de
   confidentialité ;
 - les schémas et la version du paquet correspondent au contrat documenté ;
+- CREATOR est une provenance et `CARD_CREATED` exige un événement observé ;
+- Dormant/réveil ne produisent pas de faux deltas de statistiques ;
+- la déduplication gameplay conserve les occurrences protocolaires ;
+- les entités techniques restent auditables sans polluer les sorties de coaching ;
 - le cache est contrôlé par SHA-256 ;
+- CLI et GUI appellent le même `AnalysisService` et le thread UI ne parse jamais ;
+- fichiers locaux, lots, XML direct, erreurs, réglages et annulation sont testés ;
+- une page HSReplay est refusée clairement sans scraping ;
 - la suite fonctionne sans sample privé, puis les intégrations réelles disponibles
   sont exécutées sans modifier leurs fichiers ;
 - `pytest`, `ruff check` et `ruff format --check` réussissent ;
+- la GUI s'ouvre en développement et son smoke test termine ;
+- le build propre produit et lance `dist/HSCoach/HSCoach.exe` sans Python ni admin ;
+- la matrice `docs/MANUAL_TESTING.md` est exécutée dans la mesure permise par
+  l'environnement ;
 - README et AGENTS décrivent uniquement les capacités réellement présentes.
 
 ## Discipline de livraison

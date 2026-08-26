@@ -9,7 +9,7 @@ from hscoach.models.action import (
     RecordedOption,
     TurnPhase,
 )
-from hscoach.models.card import Card, CardRef, DeckCard, InformationSource, Visibility
+from hscoach.models.card import Card, CardRef, DeckCard, InformationSource, Provenance, Visibility
 from hscoach.models.game import (
     GameAnalysis,
     KnowledgeStatus,
@@ -53,6 +53,7 @@ __all__ = [
     "ParseWarning",
     "Player",
     "PlayerSide",
+    "Provenance",
     "RecordedOption",
     "RecordedChoice",
     "ReplayDiagnostics",

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from xml.etree import ElementTree
 
 from hscoach.exceptions import ReplayInputError
+from hscoach.privacy import SENSITIVE_FIELD_NAMES, redact_sensitive_text
 
 DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024
 _FORBIDDEN_XML_DECLARATIONS = (b"<!doctype", b"<!entity")
@@ -17,6 +19,16 @@ class LoadedReplay:
 
     data: bytes
     source_label: str
+
+
+def safe_local_label(path: str | Path) -> str:
+    """Produire un nom de fichier affichable sans identifiant sensible."""
+
+    name = Path(path).name or "Replay local"
+    redacted = redact_sensitive_text(name)
+    if any(marker.casefold() in redacted.casefold() for marker in SENSITIVE_FIELD_NAMES):
+        return "Replay local [nom masqué]"
+    return redacted
 
 
 def validate_replay_xml(

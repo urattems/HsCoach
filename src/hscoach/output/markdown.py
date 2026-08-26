@@ -24,6 +24,7 @@ from hscoach.models import (
     Visibility,
 )
 from hscoach.privacy import assert_shareable_text
+from hscoach.replay.timeline import gameplay_start_event_groups
 
 MARKDOWN_FILENAME = "game_summary.md"
 
@@ -166,9 +167,11 @@ def _append_start_events(lines: list[str], analysis: GameAnalysis) -> None:
         if action.action_type is ActionType.START_GAME
     ]
     gameplay = [
-        action
-        for action in analysis.start_of_game_events
-        if action.action_type is not ActionType.START_GAME
+        (action, protocol_occurrences)
+        for action, protocol_occurrences in gameplay_start_event_groups(
+            analysis.start_of_game_events
+        )
+        if action.action_type is not ActionType.START_GAME and not _is_technical_action(action)
     ]
     lines.extend(["### Protocole", ""])
     lines.extend(f"- {action.description}" for action in protocol[:1])
@@ -178,21 +181,7 @@ def _append_start_events(lines: list[str], analysis: GameAnalysis) -> None:
     if not gameplay:
         lines.append("- Aucun effet de gameplay distinct observé.")
         return
-    counts: Counter[tuple[object, ...]] = Counter()
-    descriptions: dict[tuple[object, ...], str] = {}
-    for action in gameplay:
-        key = (
-            action.action_type,
-            action.player,
-            action.source_card.entity_id if action.source_card else None,
-            action.target_card.entity_id if action.target_card else None,
-            action.description,
-        )
-        counts[key] += 1
-        descriptions.setdefault(key, action.description)
-    for key, count in counts.items():
-        prefix = f"{count}× " if count > 1 else ""
-        lines.append(f"- {prefix}{descriptions[key]}")
+    lines.extend(f"- {action.description}" for action, _ in gameplay)
 
 
 def _append_turns(lines: list[str], analysis: GameAnalysis) -> None:
@@ -236,7 +225,7 @@ def _append_turns(lines: list[str], analysis: GameAnalysis) -> None:
                 ActionType.DEBUFF,
                 ActionType.SILENCE,
             }
-            and not _is_technical_enchantment(action)
+            and not _is_technical_action(action)
         ]
         if actions:
             lines.extend(
@@ -260,7 +249,7 @@ def _append_important_events(lines: list[str], analysis: GameAnalysis) -> None:
     descriptions = Counter(
         action.description
         for action in analysis.important_events
-        if not _is_technical_enchantment(action)
+        if not _is_technical_action(action)
     )
     if not descriptions:
         lines.append("Aucun événement important supplémentaire n’a été isolé.")
@@ -379,6 +368,7 @@ def _minion(minion: MinionState) -> str:
             (minion.stealth, "Camouflage"),
             (minion.frozen, "Gelé"),
             (minion.silenced, "Réduit au silence"),
+            (minion.dormant, "Dormant"),
         )
         if enabled
     ]
@@ -434,7 +424,11 @@ def _is_invalid_end_turn_marker(option: object) -> bool:
 
 def _observed_delta_lines(deltas: list[EntityDelta]) -> list[str]:
     visible_deltas = [
-        delta for delta in deltas if not delta.metadata.get("technical_lethal_damage_reset")
+        delta
+        for delta in deltas
+        if not delta.technical
+        and not delta.metadata.get("technical_lethal_damage_reset")
+        and delta.attribute != "dormant"
     ]
     if not visible_deltas:
         return ["Aucun changement atomique supplémentaire classifié."]
@@ -461,7 +455,7 @@ def _observed_delta_lines(deltas: list[EntityDelta]) -> list[str]:
         }.get(delta.attribute, delta.attribute)
         source = (
             f", source explicite : {delta.source_card.name}"
-            if delta.source_card is not None
+            if delta.source_card is not None and not delta.source_card.technical
             else ""
         )
         lines.append(f"- [{phase}] {card} — {attribute} : {before} → {after}{suffix}{source}.")
@@ -476,12 +470,12 @@ def _duration(seconds: float | None) -> str:
     return f"{minutes} min {remaining:02d} s" if minutes else f"{remaining} s"
 
 
-def _is_technical_enchantment(action: object) -> bool:
+def _is_technical_action(action: object) -> bool:
     target = getattr(action, "target_card", None)
-    return (
-        getattr(action, "action_type", None) is ActionType.CREATE_CARD
+    return bool(getattr(action, "technical", False)) or (
+        getattr(action, "action_type", None) is ActionType.CARD_CREATED
         and target is not None
-        and target.card_type == "ENCHANTMENT"
+        and (target.technical or target.card_type == "ENCHANTMENT")
     )
 
 

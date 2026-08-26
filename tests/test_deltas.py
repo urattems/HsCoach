@@ -111,6 +111,25 @@ def test_compare_board_states_marks_a_missing_boundary_as_incomplete() -> None:
     assert next_sequence == 7
 
 
+def test_compare_board_states_exposes_dormant_as_a_gameplay_delta() -> None:
+    card = _card(20, "DORMANT")
+    before = _board(board=[_minion(card, attack=4, health=5, max_health=5)])
+    after = _board(board=[_minion(card, attack=4, health=5, max_health=5, dormant=True)])
+
+    delta, _ = compare_board_states(
+        before,
+        after,
+        from_phase=TurnPhase.ACTION_PHASE_START,
+        to_phase=TurnPhase.ACTION_PHASE_END,
+    )
+
+    assert len(delta.entities) == 1
+    assert delta.entities[0].attribute == "dormant"
+    assert delta.entities[0].value.before is False
+    assert delta.entities[0].value.after is True
+    assert delta.entities[0].technical is False
+
+
 def test_build_turn_state_deltas_keeps_phases_and_sequences_contiguous() -> None:
     turn = TurnState(
         turn_number=1,
@@ -149,6 +168,7 @@ def _minion(
     stealth: bool = False,
     frozen: bool = False,
     silenced: bool = False,
+    dormant: bool = False,
 ) -> MinionState:
     return MinionState(
         card=card,
@@ -160,6 +180,7 @@ def _minion(
         stealth=stealth,
         frozen=frozen,
         silenced=silenced,
+        dormant=dormant,
     )
 
 

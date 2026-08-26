@@ -3,10 +3,10 @@ from pathlib import Path
 import pytest
 from hearthstone.enums import CardType, GameTag, Zone
 
-from hscoach.models.action import ActionType, PlayerSide
+from hscoach.models.action import ActionType, GameAction, PlayerSide
 from hscoach.models.card import CardRef, InformationSource, Visibility
 from hscoach.replay.parser import extract_replay_facts, parse_replay_data
-from hscoach.replay.timeline import extract_timeline
+from hscoach.replay.timeline import extract_timeline, gameplay_start_event_groups
 
 SAMPLE = Path(__file__).parents[1] / "samples" / "sample_replay.hsreplay"
 requires_user_sample = pytest.mark.skipif(
@@ -39,6 +39,7 @@ class FakeResolver:
             name=f"Carte {card_id}",
             visibility=visibility,
             source=source,
+            card_type="ENCHANTMENT" if card_id == "TECH_001e" else None,
             created_by_entity_id=created_by_entity_id,
         )
 
@@ -71,7 +72,7 @@ def test_real_replay_contains_ordered_half_turns_and_main_actions() -> None:
         ActionType.CAST_SPELL,
         ActionType.ATTACK,
         ActionType.DEATH,
-        ActionType.CREATE_CARD,
+        ActionType.CARD_CREATED,
     } <= action_types
     descriptions = [action.description for turn in result.turns for action in turn.actions]
     assert "Victoire du JOUEUR." in descriptions
@@ -86,12 +87,54 @@ def test_real_replay_contains_ordered_half_turns_and_main_actions() -> None:
     creation = next(
         action
         for action in all_actions
-        if action.action_type is ActionType.CREATE_CARD
+        if action.action_type is ActionType.CARD_CREATED
         and action.source_card is not None
         and action.target_card is not None
     )
     assert creation.target_card.created_by_entity_id == creation.source_card.entity_id
     assert result.entity_card_ids[12] == "CATA_556"
+
+    creation_targets = {
+        action.target_card.card_id
+        for action in all_actions
+        if action.action_type is ActionType.CARD_CREATED and action.target_card is not None
+    }
+    assert {"GAME_005", "JAIL_328"}.isdisjoint(creation_targets)
+    scarlet = next(
+        action.source_card
+        for action in all_actions
+        if action.action_type is ActionType.PLAY_CARD
+        and action.source_card is not None
+        and action.source_card.card_id == "JAIL_328"
+    )
+    assert scarlet.provenance is not None
+    assert scarlet.provenance.creator_entity_id == 39
+
+    beatrix_raw = [
+        action
+        for action in result.start_of_game_events
+        if action.source_card is not None and action.source_card.card_id == "JAIL_397"
+    ]
+    beatrix_gameplay = [
+        group
+        for group in gameplay_start_event_groups(result.start_of_game_events)
+        if group[0].source_card is not None and group[0].source_card.card_id == "JAIL_397"
+    ]
+    assert len(beatrix_raw) == 2
+    assert len(beatrix_gameplay) == 1
+    assert beatrix_gameplay[0][1] == 2
+
+    acolyte_dormant_actions = [
+        action
+        for action in all_actions
+        if action.target_card is not None
+        and action.target_card.entity_id == 17
+        and action.action_type in {ActionType.BECOMES_DORMANT, ActionType.AWAKENS}
+    ]
+    assert [action.action_type for action in acolyte_dormant_actions] == [
+        ActionType.BECOMES_DORMANT,
+        ActionType.AWAKENS,
+    ]
 
 
 def test_opponent_draw_is_not_retroactively_revealed_when_card_is_played() -> None:
@@ -180,22 +223,243 @@ def test_attack_death_generation_and_transform_are_reconstructed_from_protocol()
     for action_type in (
         ActionType.ATTACK,
         ActionType.DEATH,
-        ActionType.CREATE_CARD,
+        ActionType.CARD_CREATED,
         ActionType.TRANSFORM,
     ):
         assert any(action.action_type is action_type for action in actions)
 
-    generated = next(action for action in actions if action.action_type is ActionType.CREATE_CARD)
+    generated = next(action for action in actions if action.action_type is ActionType.CARD_CREATED)
     assert generated.source_card is not None
     assert generated.source_card.entity_id == 20
     assert generated.target_card is not None
     assert generated.target_card.created_by_entity_id == 20
+    assert generated.target_card.provenance is not None
+    assert generated.target_card.provenance.creator_entity_id == 20
+    assert generated.target_card.provenance.creator_card_id == "ATTACKER"
 
     transformed = next(action for action in actions if action.action_type is ActionType.TRANSFORM)
     assert transformed.source_card is not None
     assert transformed.source_card.card_id == "ATTACKER"
     assert transformed.target_card is not None
     assert transformed.target_card.card_id == "TRANSFORMED"
+
+
+def test_creator_provenance_does_not_fabricate_late_creation_events() -> None:
+    result = extract_timeline(
+        parse_replay_data(_creation_provenance_fixture()),
+        FakeResolver(),
+        player_entity_id=2,
+        opponent_entity_id=3,
+    )
+    actions = result.turns[0].actions
+    creations = [action for action in actions if action.action_type is ActionType.CARD_CREATED]
+
+    assert ActionType.CREATE_CARD is ActionType.CARD_CREATED
+    assert {
+        action.target_card.entity_id for action in creations if action.target_card is not None
+    } == {42, 43, 44}
+
+    for action in creations:
+        assert action.metadata["event_type"] == "CARD_CREATED"
+        assert action.target_card is not None
+        assert action.target_card.provenance is not None
+        assert action.target_card.provenance.creator_entity_id == 20
+        assert action.target_card.provenance.creator_card_id == "SOURCE"
+
+    technical_creation = next(
+        action
+        for action in creations
+        if action.target_card is not None and action.target_card.entity_id == 44
+    )
+    assert technical_creation.technical is True
+    assert technical_creation not in result.important_events
+
+    added_cards = {
+        action.target_card.entity_id: action.target_card
+        for action in actions
+        if action.action_type is ActionType.ADD_TO_HAND
+        and action.target_card is not None
+        and action.target_card.entity_id in {40, 41}
+    }
+    assert set(added_cards) == {40, 41}
+    assert all(card.provenance is not None for card in added_cards.values())
+    assert all(
+        card.provenance.creator_entity_id == 20
+        for card in added_cards.values()
+        if card.provenance is not None
+    )
+
+
+def test_dormant_projection_is_technical_but_cached_buffs_remain_gameplay() -> None:
+    result = extract_timeline(
+        parse_replay_data(_dormant_fixture()),
+        FakeResolver(),
+        player_entity_id=2,
+        opponent_entity_id=3,
+    )
+    actions = result.turns[0].actions
+
+    dormant = next(action for action in actions if action.action_type is ActionType.BECOMES_DORMANT)
+    awakens = next(action for action in actions if action.action_type is ActionType.AWAKENS)
+    assert dormant.description == "Carte DORMANT_MINION passe à l’état Dormant."
+    assert awakens.description == "Carte DORMANT_MINION se réveille."
+
+    technical_stats = [
+        action
+        for action in actions
+        if action.technical and action.action_type in {ActionType.BUFF, ActionType.DEBUFF}
+    ]
+    assert [action.metadata["technical_reason"] for action in technical_stats] == [
+        "dormant_projection",
+        "dormant_projection",
+        "dormant_restore",
+        "dormant_restore",
+    ]
+
+    gameplay_buffs = [
+        action
+        for action in actions
+        if not action.technical and action.action_type is ActionType.BUFF
+    ]
+    assert [action.metadata["stats_after"] for action in gameplay_buffs] == [
+        "5/5",
+        "5/6",
+    ]
+    assert len([delta for delta in result.turns[0].entity_deltas if delta.technical]) == 4
+    assert (
+        len(
+            [
+                delta
+                for delta in result.turns[0].entity_deltas
+                if not delta.technical and delta.attribute in {"attack", "max_health"}
+            ]
+        )
+        == 2
+    )
+
+
+def test_start_event_groups_only_merge_protocol_reveals_not_real_triggers() -> None:
+    source = CardRef(entity_id=39, card_id="JAIL_397", name="Commandante Beatrix")
+    description = "Commandante Beatrix déclenche son effet de début de partie."
+    two_real_triggers = [
+        GameAction(
+            sequence=sequence,
+            action_type=ActionType.START_GAME_EFFECT,
+            player=PlayerSide.OPPONENT,
+            description=description,
+            source_card=source,
+            metadata={"protocol_only_reveal": False},
+        )
+        for sequence in (1, 2)
+    ]
+
+    assert [
+        (action.sequence, occurrences)
+        for action, occurrences in gameplay_start_event_groups(two_real_triggers)
+    ] == [(1, 1), (2, 1)]
+
+    reveal_copy = GameAction(
+        sequence=2,
+        action_type=ActionType.START_GAME_EFFECT,
+        player=PlayerSide.OPPONENT,
+        description=description,
+        source_card=source,
+        metadata={"protocol_only_reveal": True},
+    )
+    assert [
+        (action.sequence, occurrences)
+        for action, occurrences in gameplay_start_event_groups([two_real_triggers[0], reveal_copy])
+    ] == [(1, 2)]
+
+
+def _creation_provenance_fixture() -> bytes:
+    zone = int(GameTag.ZONE)
+    controller = int(GameTag.CONTROLLER)
+    card_type = int(GameTag.CARDTYPE)
+    creator = int(GameTag.CREATOR)
+    turn = int(GameTag.TURN)
+    step = int(GameTag.STEP)
+    current_player = int(GameTag.CURRENT_PLAYER)
+    xml = f"""\
+<HSReplay build="1" version="1.7">
+<Game id="provenance"><GameEntity id="1"/>
+<Player id="2" playerID="1" accountHi="0" accountLo="1"/>
+<Player id="3" playerID="2" accountHi="0" accountLo="2"/>
+<FullEntity id="20" cardID="SOURCE"><Tag tag="{zone}" value="{int(Zone.PLAY)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.MINION)}"/>
+</FullEntity>
+<FullEntity id="40" cardID="LATE_CREATOR"><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.SPELL)}"/>
+</FullEntity>
+<FullEntity id="41"><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.SPELL)}"/>
+</FullEntity>
+<TagChange entity="2" tag="{current_player}" value="1"/>
+<TagChange entity="1" tag="{turn}" value="1"/>
+<TagChange entity="1" tag="{step}" value="6"/>
+<TagChange entity="1" tag="{step}" value="10"/>
+<TagChange entity="40" tag="{creator}" value="20"/>
+<TagChange entity="40" tag="{zone}" value="{int(Zone.HAND)}"/>
+<ShowEntity entity="41" cardID="SHOW_REVEALED">
+<Tag tag="{creator}" value="20"/><Tag tag="{zone}" value="{int(Zone.HAND)}"/>
+</ShowEntity>
+<FullEntity id="42"/>
+<ShowEntity entity="42" cardID="RUNTIME_PAIRED">
+<Tag tag="{creator}" value="20"/><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.SPELL)}"/>
+</ShowEntity>
+<FullEntity id="43" cardID="RUNTIME_DIRECT">
+<Tag tag="{creator}" value="20"/><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.SPELL)}"/>
+</FullEntity>
+<FullEntity id="44" cardID="TECH_001e">
+<Tag tag="{creator}" value="20"/><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.ENCHANTMENT)}"/>
+</FullEntity>
+</Game></HSReplay>
+"""
+    return xml.encode()
+
+
+def _dormant_fixture() -> bytes:
+    zone = int(GameTag.ZONE)
+    controller = int(GameTag.CONTROLLER)
+    card_type = int(GameTag.CARDTYPE)
+    attack = int(GameTag.ATK)
+    health = int(GameTag.HEALTH)
+    dormant = int(GameTag.DORMANT)
+    turn = int(GameTag.TURN)
+    step = int(GameTag.STEP)
+    current_player = int(GameTag.CURRENT_PLAYER)
+    xml = f"""\
+<HSReplay build="1" version="1.7">
+<Game id="dormant"><GameEntity id="1"/>
+<Player id="2" playerID="1" accountHi="0" accountLo="1"/>
+<Player id="3" playerID="2" accountHi="0" accountLo="2"/>
+<FullEntity id="10" cardID="DORMANT_MINION">
+<Tag tag="{zone}" value="{int(Zone.PLAY)}"/><Tag tag="{controller}" value="1"/>
+<Tag tag="{card_type}" value="{int(CardType.MINION)}"/>
+<Tag tag="{attack}" value="4"/><Tag tag="{health}" value="5"/>
+</FullEntity>
+<TagChange entity="2" tag="{current_player}" value="1"/>
+<TagChange entity="1" tag="{turn}" value="1"/>
+<TagChange entity="1" tag="{step}" value="6"/>
+<TagChange entity="1" tag="{step}" value="10"/>
+<CachedTagForDormantChange entity="10" tag="{attack}" value="4"/>
+<CachedTagForDormantChange entity="10" tag="{health}" value="5"/>
+<TagChange entity="10" tag="{dormant}" value="1"/>
+<TagChange entity="10" tag="{attack}" value="1"/>
+<TagChange entity="10" tag="{health}" value="2"/>
+<CachedTagForDormantChange entity="10" tag="{attack}" value="5"/>
+<CachedTagForDormantChange entity="10" tag="{health}" value="6"/>
+<TagChange entity="10" tag="{dormant}" value="0"/>
+<CachedTagForDormantChange entity="10" tag="{attack}" value="0"/>
+<CachedTagForDormantChange entity="10" tag="{health}" value="0"/>
+<TagChange entity="10" tag="{attack}" value="5"/>
+<TagChange entity="10" tag="{health}" value="6"/>
+</Game></HSReplay>
+"""
+    return xml.encode()
 
 
 def _structural_events_fixture() -> bytes:

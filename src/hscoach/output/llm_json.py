@@ -16,6 +16,7 @@ from hscoach.exceptions import ExportError
 from hscoach.models import CardRef, GameAnalysis, InformationSource
 from hscoach.output.json_export import safe_game_id
 from hscoach.privacy import assert_shareable_text
+from hscoach.replay.timeline import gameplay_start_event_groups
 
 LLM_JSON_FILENAME = "game_llm.json"
 LLM_SCHEMA = "hscoach-llm/1.0"
@@ -35,6 +36,7 @@ class _CompactDocument:
     def __init__(self) -> None:
         self.card_definitions: dict[str, dict[str, Any]] = {}
         self.entities: dict[str, dict[str, Any]] = {}
+        self.exported_sequences: set[int] = set()
 
     def build(self, analysis: GameAnalysis) -> dict[str, Any]:
         game = {
@@ -61,11 +63,26 @@ class _CompactDocument:
             "received": self._refs_or_none(analysis.mulligan.received),
             "source": analysis.mulligan.source.value,
         }
-        start_events = [self._action(action) for action in analysis.start_of_game_events]
+        start_events = []
+        for action, protocol_occurrences in gameplay_start_event_groups(
+            analysis.start_of_game_events
+        ):
+            if action.technical:
+                continue
+            rendered_action = self._action(action)
+            if protocol_occurrences > 1:
+                details = dict(rendered_action.get("details", {}))
+                details["protocol_occurrences"] = protocol_occurrences
+                rendered_action["details"] = details
+            start_events.append(rendered_action)
         turns = [self._turn(turn) for turn in analysis.turns]
         # Les événements importants sont déjà présents dans les événements de début
         # ou les tours. Leurs séquences évitent une deuxième copie intégrale.
-        important = [action.sequence for action in analysis.important_events]
+        important = [
+            action.sequence
+            for action in analysis.important_events
+            if not action.technical and action.sequence in self.exported_sequences
+        ]
         warnings = [
             {
                 "code": warning.code,
@@ -91,12 +108,13 @@ class _CompactDocument:
         }
 
     def _player(self, player: Any) -> dict[str, Any]:
+        known_cards = [self._ref(card) for card in player.known_cards if not card.technical]
         return _drop_none(
             {
                 "side": player.side.value,
                 "class": player.card_class,
                 "hero": self._ref(player.hero),
-                "known_cards": [self._ref(card) for card in player.known_cards],
+                "known_cards": known_cards,
             }
         )
 
@@ -107,9 +125,11 @@ class _CompactDocument:
             "round": turn.round_number,
             "active_player": turn.active_player.value,
             "action_phase_start": self._state(turn.action_phase_start_state),
-            "actions": [self._action(action) for action in turn.actions],
+            "actions": [self._action(action) for action in turn.actions if not action.technical],
             "state_changes": {
-                "entity_changes": [self._entity_delta(delta) for delta in turn.entity_deltas],
+                "entity_changes": [
+                    self._entity_delta(delta) for delta in turn.entity_deltas if not delta.technical
+                ],
                 "phase_changes": phase_changes,
             },
             "action_phase_end": self._boundary(
@@ -180,6 +200,7 @@ class _CompactDocument:
                     "stealth",
                     "frozen",
                     "silenced",
+                    "dormant",
                 )
                 if getattr(minion, name)
             ]
@@ -210,6 +231,7 @@ class _CompactDocument:
         )
 
     def _action(self, action: Any) -> dict[str, Any]:
+        self.exported_sequences.add(action.sequence)
         description = None
         if action.source_card is None and action.target_card is None:
             description = action.description
@@ -304,15 +326,20 @@ class _CompactDocument:
         return result
 
     def _state_delta(self, delta: Any) -> dict[str, Any]:
-        return {
-            "from": delta.from_phase.value,
-            "to": delta.to_phase.value,
-            "complete": delta.complete,
-            "entities": [self._entity_delta(item) for item in delta.entities],
-            "heroes": [self._hero_delta(item) for item in delta.heroes],
-            "mana": [self._mana_delta(item) for item in delta.mana],
-            "zones": [self._zone_delta(item) for item in delta.zones],
-        }
+        return _drop_none(
+            {
+                "from": delta.from_phase.value,
+                "to": delta.to_phase.value,
+                "complete": delta.complete,
+                "entities": [
+                    self._entity_delta(item) for item in delta.entities if not item.technical
+                ]
+                or None,
+                "heroes": [self._hero_delta(item) for item in delta.heroes] or None,
+                "mana": [self._mana_delta(item) for item in delta.mana] or None,
+                "zones": [self._zone_delta(item) for item in delta.zones] or None,
+            }
+        )
 
     def _hero_delta(self, delta: Any) -> dict[str, Any]:
         return _drop_none(
@@ -356,7 +383,7 @@ class _CompactDocument:
         return [self._ref(card) for card in cards]
 
     def _ref(self, card: CardRef | None) -> int | str | None:
-        if card is None:
+        if card is None or card.technical:
             return None
         key = self._card_key(card)
         entity_details = _drop_none(
@@ -365,7 +392,7 @@ class _CompactDocument:
                 "source": card.source.value
                 if card.source is not InformationSource.REPLAY_EXPLICIT
                 else None,
-                "created_by": card.created_by_entity_id,
+                "provenance": self._provenance(card),
             }
         )
         if card.visibility.value == "hidden":
@@ -388,11 +415,24 @@ class _CompactDocument:
                     ("entity:", "unknown:")
                 ):
                     existing["card"] = key
-                for field in ("source", "created_by"):
+                for field in ("source", "provenance"):
                     if field not in existing and field in entity_details:
                         existing[field] = entity_details[field]
             return card.entity_id
         return key
+
+    @staticmethod
+    def _provenance(card: CardRef) -> dict[str, Any] | None:
+        provenance = card.provenance
+        if provenance is None:
+            return None
+        return _drop_none(
+            {
+                "creator_entity_id": provenance.creator_entity_id,
+                "creator_card_id": provenance.creator_card_id,
+                "confidence": provenance.confidence.value,
+            }
+        )
 
     @staticmethod
     def _card_key(card: CardRef) -> str:
@@ -525,6 +565,10 @@ def _compact_action_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "source_explicit",
         "damage_tag_before",
         "damage_tag_after",
+        "created_by_entity_id",
+        "effect_index",
+        "protocol_only_reveal",
+        "trigger_keyword",
         "stats_after",
         "stats_before",
         "tag",

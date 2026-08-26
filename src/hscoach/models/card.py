@@ -22,6 +22,19 @@ class InformationSource(StrEnum):
 
 
 @dataclass(slots=True, frozen=True)
+class Provenance:
+    """Provenance historique explicitement portée par le replay.
+
+    Une provenance n'est pas, à elle seule, la preuve qu'une carte vient d'être
+    créée à l'instant où elle est observée.
+    """
+
+    creator_entity_id: int
+    creator_card_id: str | None = None
+    confidence: InformationSource = InformationSource.REPLAY_EXPLICIT
+
+
+@dataclass(slots=True, frozen=True)
 class Card:
     """Carte issue du fichier complet HearthstoneJSON d'une locale."""
 
@@ -57,6 +70,22 @@ class CardRef:
     card_type: str | None = None
     mechanics: tuple[str, ...] = ()
     created_by_entity_id: int | None = None
+    provenance: Provenance | None = None
+    technical: bool = False
+
+    def __post_init__(self) -> None:
+        """Conserver l'ancien identifiant tout en exposant la provenance V3."""
+
+        if self.provenance is None and self.created_by_entity_id is not None:
+            object.__setattr__(
+                self,
+                "provenance",
+                Provenance(creator_entity_id=self.created_by_entity_id),
+            )
+        elif self.created_by_entity_id is None and self.provenance is not None:
+            object.__setattr__(self, "created_by_entity_id", self.provenance.creator_entity_id)
+        if self.card_type == "ENCHANTMENT" and not self.technical:
+            object.__setattr__(self, "technical", True)
 
 
 @dataclass(slots=True, frozen=True)

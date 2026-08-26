@@ -23,6 +23,25 @@ def test_load_local_replay_accepts_supported_extensions(tmp_path, extension: str
     assert loaded == LoadedReplay(data=VALID_REPLAY, source_label=replay_path.name)
 
 
+def test_load_local_replay_redacts_sensitive_filename(tmp_path) -> None:
+    replay_path = tmp_path / "Alice#1234.hsreplay"
+    replay_path.write_bytes(VALID_REPLAY)
+
+    loaded = load_local_replay(replay_path)
+
+    assert loaded.source_label == "JOUEUR.hsreplay"
+    assert "Alice#1234" not in loaded.source_label
+
+
+def test_missing_local_replay_does_not_echo_sensitive_filename(tmp_path) -> None:
+    replay_path = tmp_path / "Alice#1234.hsreplay"
+
+    with pytest.raises(ReplayInputError) as captured:
+        load_local_replay(replay_path)
+
+    assert "Alice#1234" not in str(captured.value)
+
+
 def test_load_local_replay_rejects_unsupported_extension(tmp_path) -> None:
     replay_path = tmp_path / "partie.json"
     replay_path.write_bytes(VALID_REPLAY)
@@ -68,6 +87,23 @@ def test_load_source_dispatches_local_replay(tmp_path) -> None:
     replay_path.write_bytes(VALID_REPLAY)
 
     assert load_source(str(replay_path)).data == VALID_REPLAY
+
+
+def test_load_source_refuses_hsreplay_page_without_http_request() -> None:
+    requested = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requested
+        requested = True
+        return httpx.Response(200, content=VALID_REPLAY)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(ReplayInputError, match="pas encore pris en charge"),
+    ):
+        load_source("https://hsreplay.net/replay/ABC123", client=client)
+
+    assert requested is False
 
 
 def test_remote_replay_uses_injected_client_and_streams_response(caplog) -> None:

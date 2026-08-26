@@ -27,6 +27,7 @@ class MinionState:
     stealth: bool = False
     frozen: bool = False
     silenced: bool = False
+    dormant: bool = False
     source: InformationSource = InformationSource.GAMESTATE_RECONSTRUCTED
 
 
@@ -87,6 +88,7 @@ class EntityDelta:
     source_card: CardRef | None = None
     information_source: InformationSource = InformationSource.REPLAY_EXPLICIT
     metadata: dict[str, int | str | bool | None] = field(default_factory=dict)
+    technical: bool = False
 
 
 @dataclass(slots=True)

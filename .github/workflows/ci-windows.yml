@@ -1,0 +1,70 @@
+name: Validation et build Windows
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      upload_artifact:
+        description: Publier l'archive seulement après validation du gate licences
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Récupérer les sources
+        uses: actions/checkout@v7
+
+      - name: Installer Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Installer HSCoach et ses outils
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,gui,build]"
+          python -m pip check
+
+      - name: Tester et contrôler le format
+        shell: pwsh
+        run: |
+          python -m pytest
+          python -m ruff check .
+          python -m ruff format --check .
+          python -m hscoach.gui --smoke-test
+
+      - name: Construire le bundle one-folder
+        shell: pwsh
+        run: .\scripts\build_windows.ps1 -SkipDependencyInstall
+
+      - name: Créer l’archive utilisateur
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_artifact }}
+        shell: pwsh
+        run: |
+          Compress-Archive -LiteralPath .\dist\HSCoach -DestinationPath .\dist\HSCoach-Windows-x64.zip
+          Get-FileHash .\dist\HSCoach-Windows-x64.zip -Algorithm SHA256
+
+      - name: Publier l’artefact de validation non signé
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_artifact }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: HSCoach-Windows-x64
+          path: dist/HSCoach-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -19,6 +19,11 @@ from hscoach.privacy import assert_shareable_text
 
 JSON_FILENAME = "game_analysis.json"
 _SAFE_GAME_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?")
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{index}" for index in range(1, 10)}
+    | {f"LPT{index}" for index in range(1, 10)}
+)
 
 __all__ = ["analysis_to_dict", "export_json", "render_json", "safe_game_id"]
 
@@ -123,7 +128,12 @@ def safe_game_id(game_id: str) -> str:
     """Retourner un nom de dossier déterministe sans séparateur ni traversal."""
 
     candidate = game_id.strip()
-    if _SAFE_GAME_ID.fullmatch(candidate) and candidate not in {".", ".."}:
+    windows_stem = candidate.split(".", maxsplit=1)[0].upper()
+    if (
+        _SAFE_GAME_ID.fullmatch(candidate)
+        and candidate not in {".", ".."}
+        and windows_stem not in _WINDOWS_RESERVED_STEMS
+    ):
         return candidate
 
     digest = hashlib.sha256(game_id.encode("utf-8")).hexdigest()[:16]

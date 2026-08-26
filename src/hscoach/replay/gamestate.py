@@ -10,7 +10,7 @@ from hearthstone.enums import CardType, GameTag, Step, Zone
 from hslog.export import EntityTreeExporter
 
 from hscoach.models.action import PlayerSide
-from hscoach.models.card import CardRef, InformationSource, Visibility
+from hscoach.models.card import CardRef, InformationSource, Provenance, Visibility
 from hscoach.models.game import ParseWarning
 from hscoach.models.state import BoardState, HeroState, MinionState, SideState
 from hscoach.replay.parser import ReplayContext
@@ -97,6 +97,20 @@ class _SnapshotExporter(EntityTreeExporter):
         self.snapshots_by_turn: dict[int, TurnSnapshot] = {}
         self.warnings: list[ParseWarning] = []
         self._warning_keys: set[tuple[str, int]] = set()
+        self._dormant_cache: dict[int, dict[GameTag, int]] = {}
+
+    def handle_cached_tag_for_dormant_change(self, packet: object) -> None:
+        """Mémoriser les valeurs effectives que le client masque pendant Dormant."""
+
+        entity_id = _packet_entity_id(getattr(packet, "entity", None))
+        if entity_id is None:
+            return
+        try:
+            tag = GameTag(packet.tag)
+            value = int(packet.value)
+        except (TypeError, ValueError):
+            return
+        self._dormant_cache.setdefault(entity_id, {})[tag] = value
 
     def handle_tag_change(self, packet: object) -> object:
         entity = super().handle_tag_change(packet)
@@ -310,26 +324,50 @@ class _SnapshotExporter(EntityTreeExporter):
     def _entity_ref(self, entity: object) -> CardRef:
         card_id = getattr(entity, "card_id", None) or None
         visibility = Visibility.KNOWN if card_id else Visibility.HIDDEN
-        return self.resolver.reference(
+        creator_entity_id = _tag(entity, GameTag.CREATOR)
+        reference = self.resolver.reference(
             card_id,
             entity_id=int(entity.id),
             visibility=visibility,
-            created_by_entity_id=_tag(entity, GameTag.CREATOR),
+            created_by_entity_id=creator_entity_id,
             source=InformationSource.GAMESTATE_RECONSTRUCTED,
+        )
+        if creator_entity_id is None:
+            return reference
+        creator = next(
+            (
+                candidate
+                for candidate in self.game.entities
+                if int(candidate.id) == creator_entity_id
+            ),
+            None,
+        )
+        return replace(
+            reference,
+            provenance=Provenance(
+                creator_entity_id=creator_entity_id,
+                creator_card_id=(getattr(creator, "card_id", None) or None)
+                if creator is not None
+                else None,
+            ),
         )
 
     def _minion_state(self, entity: object) -> MinionState:
-        maximum_health = _tag(entity, GameTag.HEALTH)
+        dormant = bool(_tag(entity, GameTag.DORMANT))
+        cached = self._dormant_cache.get(int(entity.id), {}) if dormant else {}
+        maximum_health = cached.get(GameTag.HEALTH, _tag(entity, GameTag.HEALTH))
+        damage = cached.get(GameTag.DAMAGE, _tag(entity, GameTag.DAMAGE) or 0)
         return MinionState(
             card=self._entity_ref(entity),
-            attack=_tag(entity, GameTag.ATK),
-            health=_current_health(entity),
+            attack=cached.get(GameTag.ATK, _tag(entity, GameTag.ATK)),
+            health=maximum_health - damage if maximum_health is not None else None,
             max_health=maximum_health,
             taunt=bool(_tag(entity, GameTag.TAUNT)),
             divine_shield=bool(_tag(entity, GameTag.DIVINE_SHIELD)),
             stealth=bool(_tag(entity, GameTag.STEALTH)),
             frozen=bool(_tag(entity, GameTag.FROZEN)),
             silenced=bool(_tag(entity, GameTag.SILENCED)),
+            dormant=dormant,
         )
 
 
@@ -357,6 +395,18 @@ def _tag(entity: object | None, tag: GameTag) -> int | None:
         return None
     value = entity.tags.get(tag)
     return int(value) if value is not None else None
+
+
+def _packet_entity_id(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value or None
+    if isinstance(value, dict):
+        return _packet_entity_id(value.get("id") or value.get("entity"))
+    if value is None:
+        return None
+    return _packet_entity_id(getattr(value, "id", None))
 
 
 def _current_health(entity: object | None) -> int | None:

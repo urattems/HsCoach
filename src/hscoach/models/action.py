@@ -46,6 +46,8 @@ class ActionType(StrEnum):
     SILENCE = "Silence"
     DISCOVER = "Découverte"
     CHOICE = "Choix"
+    CARD_CREATED = "Carte créée"
+    # Alias Python V2 conservé pour les consommateurs existants.
     CREATE_CARD = "Carte créée"
     ADD_TO_HAND = "Carte ajoutée en main"
     SHUFFLE_INTO_DECK = "Carte mélangée dans le deck"
@@ -59,6 +61,8 @@ class ActionType(StrEnum):
     VICTORY = "Victoire"
     DEFEAT = "Défaite"
     CONCEDE = "Concession"
+    BECOMES_DORMANT = "Devient Dormant"
+    AWAKENS = "Réveil"
     UNCLASSIFIED = "Événement non classifié"
 
 
@@ -75,6 +79,7 @@ class GameAction:
     target_card: CardRef | None = None
     information_source: InformationSource = InformationSource.REPLAY_EXPLICIT
     metadata: dict[str, Any] = field(default_factory=dict)
+    technical: bool = False
 
 
 @dataclass(slots=True)

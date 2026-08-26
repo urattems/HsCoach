@@ -4,6 +4,7 @@ from hscoach.models import (
     CardRef,
     Decision,
     DeckCard,
+    EntityDelta,
     GameAction,
     GameAnalysis,
     HeroState,
@@ -14,7 +15,9 @@ from hscoach.models import (
     RecordedOption,
     ReplayMetadata,
     SideState,
+    TurnPhase,
     TurnState,
+    ValueDelta,
     Visibility,
 )
 from hscoach.output.markdown import export_markdown, render_markdown
@@ -196,3 +199,75 @@ def test_markdown_hides_invalid_end_turn_marker_and_labels_option_availability()
     assert "Terminer le tour" not in report
     assert "INVALID" not in report
     assert "REQ_ENOUGH_MANA" not in report
+
+
+def test_markdown_deduplicates_protocol_only_beatrix_occurrence() -> None:
+    analysis = analysis_fixture()
+    analysis.start_of_game_events = _beatrix_start_events(protocol_only_second=True)
+
+    report = render_markdown(analysis)
+
+    description = "Commandante Beatrix déclenche son effet de début de partie."
+    assert report.count(description) == 1
+    assert f"2× {description}" not in report
+
+
+def test_markdown_keeps_two_independent_beatrix_triggers() -> None:
+    analysis = analysis_fixture()
+    analysis.start_of_game_events = _beatrix_start_events(protocol_only_second=False)
+
+    report = render_markdown(analysis)
+
+    assert report.count("Commandante Beatrix déclenche son effet de début de partie.") == 2
+
+
+def test_markdown_keeps_gameplay_delta_but_hides_technical_enchantment_name() -> None:
+    analysis = analysis_fixture()
+    maiev = analysis.player.deck[0].card
+    technical = analysis.turns[0].actions[1].target_card
+    assert technical is not None
+    analysis.turns[0].entity_deltas = [
+        EntityDelta(
+            sequence=3,
+            entity_id=maiev.entity_id or 12,
+            side=PlayerSide.PLAYER,
+            phase=TurnPhase.ACTION_PHASE_END,
+            attribute="health",
+            value=ValueDelta(before=3, after=5, delta=2),
+            card=maiev,
+            source_card=technical,
+        )
+    ]
+
+    report = render_markdown(analysis)
+
+    assert "points de vie : 3 → 5 (+2)" in report
+    assert "Cost - 2" not in report
+
+
+def _beatrix_start_events(*, protocol_only_second: bool) -> list[GameAction]:
+    beatrix = CardRef(
+        entity_id=70,
+        card_id="BEATRIX",
+        name="Commandante Beatrix",
+        card_type="MINION",
+    )
+    description = "Commandante Beatrix déclenche son effet de début de partie."
+    return [
+        GameAction(
+            sequence=1,
+            action_type=ActionType.START_GAME_EFFECT,
+            player=PlayerSide.PLAYER,
+            description=description,
+            source_card=beatrix,
+            metadata={"protocol_only_reveal": False},
+        ),
+        GameAction(
+            sequence=2,
+            action_type=ActionType.START_GAME_EFFECT,
+            player=PlayerSide.PLAYER,
+            description=description,
+            source_card=beatrix,
+            metadata={"protocol_only_reveal": protocol_only_second},
+        ),
+    ]

@@ -72,6 +72,15 @@ def test_refresh_command_reports_card_count(monkeypatch, capsys) -> None:
     assert "1 carte" in capsys.readouterr().out
 
 
+def test_refresh_command_rejects_invalid_locale_without_traceback(capsys) -> None:
+    assert main(["actualiser-cartes", "--locale", r"..\secret"]) == 2
+
+    error = capsys.readouterr().err
+    assert error.count("Erreur :") == 1
+    assert "locale" in error.casefold()
+    assert "Traceback" not in error
+
+
 def test_analyse_command_exports_both_reports_in_french(monkeypatch, capsys, tmp_path) -> None:
     analysis = GameAnalysis(
         metadata=ReplayMetadata(game_id="42", turn_count=3),
@@ -92,8 +101,11 @@ def test_analyse_command_exports_both_reports_in_french(monkeypatch, capsys, tmp
         markdown=tmp_path / "42" / "game_summary.md",
         json=tmp_path / "42" / "game_analysis.json",
     )
-    monkeypatch.setattr(cli, "_load_analysis", lambda *args, **kwargs: analysis)
-    monkeypatch.setattr(cli, "export_analysis", lambda *args, **kwargs: reports)
+    monkeypatch.setattr(
+        cli,
+        "_analyse_and_export",
+        lambda *args, **kwargs: (analysis, reports),
+    )
 
     assert main(["analyser", "replay.hsreplay"]) == 0
 

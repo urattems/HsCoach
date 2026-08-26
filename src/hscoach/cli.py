@@ -6,16 +6,13 @@ import argparse
 import logging
 import sys
 from collections.abc import Sequence
-from dataclasses import replace
 from pathlib import Path
 
-from hscoach.cards import HearthstoneJSON
+from hscoach.application import AnalysisRequest, AnalysisService, AnalysisStatus
 from hscoach.config import AppConfig
 from hscoach.exceptions import HSCoachError
-from hscoach.input import load_source
 from hscoach.models import GameAnalysis, KnowledgeStatus
-from hscoach.output import ExportedReports, export_analysis
-from hscoach.replay.parser import analyze_replay_data
+from hscoach.output import ExportedReports
 
 LOGGER = logging.getLogger("hscoach")
 
@@ -84,31 +81,37 @@ def _load_analysis(
     *,
     allow_en_fallback: bool = False,
 ) -> GameAnalysis:
-    loaded = load_source(
+    return AnalysisService(config).inspect(
         source,
-        max_size_bytes=config.max_download_size_bytes,
-        timeout_seconds=config.http_timeout_seconds,
-    )
-    cards = HearthstoneJSON(
-        config.cache_directory,
-        locale=config.locale,
-        timeout=config.http_timeout_seconds,
-    ).load()
-    english_cards = None
-    if allow_en_fallback:
-        english_cards = HearthstoneJSON(
-            config.cache_directory,
-            locale="enUS",
-            timeout=config.http_timeout_seconds,
-        ).load()
-    return analyze_replay_data(
-        loaded.data,
-        cards,
-        english_cards_by_id=english_cards,
         allow_en_fallback=allow_en_fallback,
-        source_label=loaded.source_label,
-        max_size_bytes=config.max_download_size_bytes,
     )
+
+
+def _analyse_and_export(
+    source: str,
+    config: AppConfig,
+    *,
+    allow_en_fallback: bool = False,
+) -> tuple[GameAnalysis, ExportedReports]:
+    """Passer par le service partagé tout en conservant le contrat CLI historique."""
+
+    request = AnalysisRequest(
+        sources=(source,),
+        output_directory=config.output_directory,
+        export_markdown=True,
+        export_full_json=True,
+        export_llm_json=True,
+        allow_en_fallback=allow_en_fallback,
+    )
+    batch = AnalysisService(config).analyze_batch(request)
+    if not batch.results:
+        raise HSCoachError("L'analyse du replay n'a produit aucun résultat.")
+    result = batch.results[0]
+    if result.status is not AnalysisStatus.SUCCESS:
+        raise HSCoachError(result.error_message or "L'analyse du replay a échoué.")
+    if result.analysis is None or result.reports is None:
+        raise HSCoachError("L'analyse du replay est incomplète.")
+    return result.analysis, result.reports
 
 
 def _show_diagnostics(analysis: GameAnalysis) -> None:
@@ -171,8 +174,10 @@ def _show_analysis_success(analysis: GameAnalysis, reports: ExportedReports) -> 
     print()
     print("Rapports créés :")
     print()
-    print(_display_path(reports.markdown))
-    print(_display_path(reports.json))
+    if reports.markdown is not None:
+        print(_display_path(reports.markdown))
+    if reports.json is not None:
+        print(_display_path(reports.json))
     if reports.llm is not None:
         print(_display_path(reports.llm))
 
@@ -184,7 +189,7 @@ def _run_interactive(config: AppConfig) -> int:
     if choice == "2":
         return main(["analyser", input("URL XML directe : ").strip()])
     if choice == "3":
-        cards = HearthstoneJSON(config.cache_directory, locale=config.locale).refresh()
+        cards = AnalysisService(config).refresh_cards()
         print(f"Données des cartes actualisées : {_card_count_label(len(cards))}.")
     elif choice == "4":
         _show_configuration(config)
@@ -209,12 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _show_configuration(config)
             return 0
         if args.command == "actualiser-cartes":
-            localized_config = replace(config, locale=args.locale)
-            cards = HearthstoneJSON(
-                localized_config.cache_directory,
-                locale=localized_config.locale,
-                timeout=localized_config.http_timeout_seconds,
-            ).refresh()
+            cards = AnalysisService(config).refresh_cards(locale=args.locale)
             print(f"Données des cartes actualisées : {_card_count_label(len(cards))}.")
             return 0
         if args.command == "inspecter":
@@ -224,12 +224,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "analyser":
             print("Analyse du replay...")
             print()
-            analysis = _load_analysis(
+            analysis, reports = _analyse_and_export(
                 args.source,
                 config,
                 allow_en_fallback=args.allow_en_fallback,
             )
-            reports = export_analysis(analysis, config.output_directory)
             _show_analysis_success(analysis, reports)
             return 0
         return _run_interactive(config)

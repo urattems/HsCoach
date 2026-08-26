@@ -7,13 +7,14 @@ ne modifie donc jamais une pioche auparavant cachée.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Protocol
 
 from hearthstone.enums import BlockType, CardType, GameTag, PlayState, Step, Zone
 from hslog.packets import (
     Block,
+    CachedTagForDormantChange,
     ChangeEntity,
     CreateGame,
     FullEntity,
@@ -23,7 +24,7 @@ from hslog.packets import (
 )
 
 from hscoach.models.action import ActionType, GameAction, PlayerSide, TurnPhase
-from hscoach.models.card import CardRef, InformationSource, Visibility
+from hscoach.models.card import CardRef, InformationSource, Provenance, Visibility
 from hscoach.models.game import ParseWarning
 from hscoach.models.state import EntityDelta, TurnState, ValueDelta
 from hscoach.replay.parser import ReplayContext
@@ -63,6 +64,9 @@ class _EntityState:
     observable_card_id: str | None = None
     tags: dict[GameTag, int] = field(default_factory=dict)
     creation_emitted: bool = False
+    dormant_cached_tags: dict[GameTag, int] = field(default_factory=dict)
+    dormant_projection_tags: set[GameTag] = field(default_factory=set)
+    dormant_restore_tags: set[GameTag] = field(default_factory=set)
 
     @property
     def controller(self) -> int | None:
@@ -93,7 +97,7 @@ class _BlockContext:
 
 
 _IMPORTANT_ACTIONS = {
-    ActionType.CREATE_CARD,
+    ActionType.CARD_CREATED,
     ActionType.DEATH,
     ActionType.PLAY_SECRET,
     ActionType.REVEAL_SECRET,
@@ -131,6 +135,7 @@ class _TimelineBuilder:
         self.last_timestamp = context.game_xml.attrib.get("ts")
         self.current_phase = TurnPhase.UNKNOWN
         self.block_stack: list[_BlockContext] = []
+        self.pending_creation_entity_id: int | None = None
 
     def build(self) -> TimelineResult:
         packets = list(self.context.packet_tree)
@@ -203,12 +208,22 @@ class _TimelineBuilder:
 
     def _visit(self, packet: object) -> None:
         self._remember_timestamp(packet)
+        if self.pending_creation_entity_id is not None and not (
+            isinstance(packet, ShowEntity)
+            and _entity_id(packet.entity) == self.pending_creation_entity_id
+        ):
+            # Seul le ShowEntity immédiatement associé au FullEntity constitue
+            # encore la même introduction. Une révélation tardive ne doit pas
+            # fabriquer une création à cet instant.
+            self.pending_creation_entity_id = None
         if isinstance(packet, Block):
             self._visit_block(packet)
         elif isinstance(packet, ShowEntity | FullEntity | ChangeEntity):
             self._visit_entity_packet(packet)
         elif isinstance(packet, HideEntity):
             self._visit_hide_entity(packet)
+        elif isinstance(packet, CachedTagForDormantChange):
+            self._visit_cached_dormant_change(packet)
         elif isinstance(packet, TagChange):
             self._visit_tag_change(packet)
         elif hasattr(packet, "packets"):
@@ -282,10 +297,15 @@ class _TimelineBuilder:
                 self._emit(
                     ActionType.START_GAME_EFFECT,
                     side,
-                    f"{source.name} déclenche un effet de début de partie.",
+                    f"{source.name} déclenche son effet de début de partie.",
                     timestamp=timestamp,
                     source_card=source,
-                    metadata={"block_type": block_type.name},
+                    metadata={
+                        "block_type": block_type.name,
+                        "effect_index": getattr(block, "effectindex", None),
+                        "trigger_keyword": getattr(block, "trigger_keyword", None),
+                        "protocol_only_reveal": _is_reveal_only_trigger(block, entity_id),
+                    },
                     destination=destination,
                     sequence=sequence,
                 )
@@ -406,23 +426,32 @@ class _TimelineBuilder:
             metadata={"block_type": BlockType.POWER.name, "entity_id": entity_id},
             destination=destination,
             sequence=sequence,
+            technical=source.technical,
         )
 
     def _visit_entity_packet(self, packet: ShowEntity | FullEntity | ChangeEntity) -> None:
         entity_id = _entity_id(packet.entity)
         if entity_id is None:
             return
+        introduced = isinstance(packet, FullEntity) and entity_id not in self.entities
         state = self.entities.setdefault(entity_id, _EntityState(entity_id))
         previous_zone = state.zone
         previous_ref = self._reference(entity_id)
         previous_id = state.raw_card_id
+
+        if introduced:
+            self.pending_creation_entity_id = entity_id
 
         card_id = (packet.card_id or "").strip() or None
         if isinstance(packet, ChangeEntity) or card_id:
             state.raw_card_id = card_id
             state.observable_card_id = card_id
         self._apply_tags(state, packet.tags)
-        self._emit_creation_if_needed(state)
+        if (introduced and (state.raw_card_id is not None or state.creator is not None)) or (
+            isinstance(packet, ShowEntity) and self.pending_creation_entity_id == entity_id
+        ):
+            self._emit_creation_if_needed(state, observed_introduction=True)
+            self.pending_creation_entity_id = None
         self._handle_zone_change(state, previous_zone, state.zone)
 
         if (
@@ -458,6 +487,43 @@ class _TimelineBuilder:
             state.observable_card_id = None
         self._handle_zone_change(state, previous_zone, zone)
 
+    def _visit_cached_dormant_change(self, packet: CachedTagForDormantChange) -> None:
+        """Conserver les statistiques effectives masquées par la projection Dormant."""
+
+        entity_id = _entity_id(packet.entity)
+        if entity_id is None:
+            return
+        try:
+            tag = GameTag(packet.tag)
+        except ValueError:
+            return
+        if tag not in {GameTag.ATK, GameTag.HEALTH, GameTag.DAMAGE}:
+            return
+
+        state = self.entities.setdefault(entity_id, _EntityState(entity_id))
+        current_value = int(packet.value)
+        if (
+            not state.tags.get(GameTag.DORMANT)
+            and tag in state.dormant_restore_tags
+            and current_value == 0
+        ):
+            # Au réveil, le protocole efface son cache avec des zéros avant de
+            # restaurer les vraies valeurs. Ces zéros ne sont pas des stats.
+            return
+
+        previous_value = state.dormant_cached_tags.get(tag)
+        state.dormant_cached_tags[tag] = current_value
+        if state.tags.get(GameTag.DORMANT) and previous_value is not None:
+            # Une vraie modification reçue pendant Dormant touche le cache
+            # effectif. Elle doit rester visible, contrairement à la projection.
+            self._record_stat_change(
+                state,
+                tag,
+                previous_value,
+                current_value,
+                use_dormant_cache=True,
+            )
+
     def _visit_tag_change(self, packet: TagChange) -> None:
         entity_id = _entity_id(packet.entity)
         if entity_id is None:
@@ -469,7 +535,25 @@ class _TimelineBuilder:
         state = self.entities.setdefault(entity_id, _EntityState(entity_id))
         previous_zone = state.zone
         previous_value = state.tags.get(tag)
+        was_dormant = bool(state.tags.get(GameTag.DORMANT))
         state.tags[tag] = int(packet.value)
+
+        if tag is GameTag.DORMANT and bool(previous_value) != bool(packet.value):
+            if packet.value:
+                state.dormant_projection_tags = {
+                    cached_tag
+                    for cached_tag in state.dormant_cached_tags
+                    if cached_tag in {GameTag.ATK, GameTag.HEALTH, GameTag.DAMAGE}
+                }
+                state.dormant_restore_tags.clear()
+            else:
+                state.dormant_restore_tags = {
+                    cached_tag
+                    for cached_tag in state.dormant_cached_tags
+                    if cached_tag in {GameTag.ATK, GameTag.HEALTH, GameTag.DAMAGE}
+                }
+                state.dormant_projection_tags.clear()
+            self._record_dormant_change(state, was_dormant, bool(packet.value))
 
         if tag is GameTag.CURRENT_PLAYER:
             if packet.value:
@@ -499,8 +583,6 @@ class _TimelineBuilder:
                 self._emit_explicit_end_turn()
         elif tag is GameTag.ZONE:
             self._handle_zone_change(state, previous_zone, state.zone)
-        elif tag is GameTag.CREATOR:
-            self._emit_creation_if_needed(state)
         elif tag is GameTag.PLAYSTATE:
             self._emit_playstate(entity_id, int(packet.value))
 
@@ -510,7 +592,100 @@ class _TimelineBuilder:
             GameTag.HEALTH,
             GameTag.SILENCED,
         }:
-            self._record_stat_change(state, tag, previous_value, int(packet.value))
+            technical_reason = self._technical_stat_transition(
+                state,
+                tag,
+                previous_value,
+                int(packet.value),
+            )
+            self._record_stat_change(
+                state,
+                tag,
+                previous_value,
+                int(packet.value),
+                technical_reason=technical_reason,
+            )
+
+    def _technical_stat_transition(
+        self,
+        state: _EntityState,
+        tag: GameTag,
+        previous_value: int | None,
+        current_value: int,
+    ) -> str | None:
+        if tag not in {GameTag.ATK, GameTag.HEALTH, GameTag.DAMAGE}:
+            return None
+
+        cached_value = state.dormant_cached_tags.get(tag)
+        if state.tags.get(GameTag.DORMANT) and tag in state.dormant_projection_tags:
+            state.dormant_projection_tags.discard(tag)
+            if cached_value is not None and previous_value == cached_value:
+                return "dormant_projection"
+        elif not state.tags.get(GameTag.DORMANT) and tag in state.dormant_restore_tags:
+            state.dormant_restore_tags.discard(tag)
+            if cached_value is not None and current_value == cached_value:
+                return "dormant_restore"
+
+        if state.card_type is CardType.MINION and state.zone in {
+            Zone.GRAVEYARD,
+            Zone.REMOVEDFROMGAME,
+        }:
+            return "entity_left_play"
+        return None
+
+    def _record_dormant_change(
+        self,
+        state: _EntityState,
+        previous_value: bool,
+        current_value: bool,
+    ) -> None:
+        if self.current_turn is None:
+            return
+        side = self._side_for_entity(state.entity_id)
+        target = self._reference(state.entity_id)
+        source = self._explicit_source_for_target(state.entity_id)
+        sequence = self._reserve_sequence()
+        metadata: dict[str, object] = {
+            "entity_id": state.entity_id,
+            "tag": GameTag.DORMANT.name,
+            "before": previous_value,
+            "after": current_value,
+            "phase": self.current_phase.value,
+        }
+        if source is not None:
+            metadata["source_explicit"] = True
+        self.current_turn.entity_deltas.append(
+            EntityDelta(
+                sequence=sequence,
+                entity_id=state.entity_id,
+                side=side,
+                phase=self.current_phase,
+                attribute="dormant",
+                value=ValueDelta(before=previous_value, after=current_value),
+                card=target,
+                source_card=source,
+                metadata={
+                    key: value
+                    for key, value in metadata.items()
+                    if isinstance(value, (str, int, bool)) or value is None
+                },
+            )
+        )
+        action_type = ActionType.BECOMES_DORMANT if current_value else ActionType.AWAKENS
+        description = (
+            f"{target.name} passe à l’état Dormant."
+            if current_value
+            else f"{target.name} se réveille."
+        )
+        self._emit(
+            action_type,
+            side,
+            description,
+            source_card=source,
+            target_card=target,
+            metadata=metadata,
+            sequence=sequence,
+        )
 
     def _update_phase(self, raw_step: object) -> None:
         step = _enum_or_default(Step, raw_step, Step.INVALID)
@@ -691,6 +866,9 @@ class _TimelineBuilder:
         tag: GameTag,
         previous_value: int | None,
         current_value: int,
+        *,
+        use_dormant_cache: bool = False,
+        technical_reason: str | None = None,
     ) -> None:
         if self.current_turn is None:
             return
@@ -716,11 +894,21 @@ class _TimelineBuilder:
             "delta": current_value - previous_value,
             "phase": self.current_phase.value,
         }
+        technical = technical_reason is not None
+        if technical_reason is not None:
+            metadata["technical_reason"] = technical_reason
         if source is not None:
             metadata["source_explicit"] = True
 
         if tag is GameTag.DAMAGE:
-            maximum = state.tags.get(GameTag.HEALTH)
+            maximum = (
+                state.dormant_cached_tags.get(
+                    GameTag.HEALTH,
+                    state.tags.get(GameTag.HEALTH),
+                )
+                if use_dormant_cache
+                else state.tags.get(GameTag.HEALTH)
+            )
             is_lethal_reset = (
                 current_value < previous_value
                 and maximum is not None
@@ -751,14 +939,22 @@ class _TimelineBuilder:
                 )
             else:
                 metadata["technical_lethal_damage_reset"] = True
+                technical = True
         elif tag in {GameTag.ATK, GameTag.HEALTH}:
             if state.card_type not in {CardType.MINION, CardType.HERO}:
                 return
-            attack = state.tags.get(GameTag.ATK)
-            damage = state.tags.get(GameTag.DAMAGE, 0)
+            effective_tags = state.dormant_cached_tags if use_dormant_cache else state.tags
+            attack = effective_tags.get(GameTag.ATK)
+            damage = effective_tags.get(GameTag.DAMAGE, 0)
             if tag is GameTag.ATK:
-                before_stats = (previous_value, (state.tags.get(GameTag.HEALTH) or 0) - damage)
-                after_stats = (current_value, (state.tags.get(GameTag.HEALTH) or 0) - damage)
+                before_stats = (
+                    previous_value,
+                    (effective_tags.get(GameTag.HEALTH) or 0) - damage,
+                )
+                after_stats = (
+                    current_value,
+                    (effective_tags.get(GameTag.HEALTH) or 0) - damage,
+                )
                 attribute = "attack"
             else:
                 before_stats = (attack, previous_value - damage)
@@ -811,6 +1007,7 @@ class _TimelineBuilder:
                     for key, value in metadata.items()
                     if isinstance(value, (str, int, bool)) or value is None
                 },
+                technical=technical,
             )
         )
         if action_type is not None and description is not None:
@@ -822,6 +1019,7 @@ class _TimelineBuilder:
                 target_card=target,
                 metadata=metadata,
                 sequence=sequence,
+                technical=technical,
             )
 
     def _explicit_source_for_target(self, target_id: int) -> CardRef | None:
@@ -834,23 +1032,36 @@ class _TimelineBuilder:
                 return self._reference(context.entity_id)
         return None
 
-    def _emit_creation_if_needed(self, state: _EntityState) -> None:
-        if state.creation_emitted or state.creator is None:
+    def _emit_creation_if_needed(
+        self,
+        state: _EntityState,
+        *,
+        observed_introduction: bool,
+    ) -> None:
+        if not observed_introduction or state.creation_emitted:
             return
         state.creation_emitted = True
         target = self._reference(state.entity_id)
-        source = self._reference(state.creator)
+        source = self._reference(state.creator) if state.creator is not None else None
         side = self._side_for_entity(state.entity_id)
+        if source is not None and source.visibility is Visibility.KNOWN:
+            description = f"{target.name} est créée par {source.name}."
+        elif target.visibility is Visibility.KNOWN:
+            description = f"{target.name} entre dans la partie."
+        else:
+            description = "Une carte inconnue entre dans la partie."
         self._emit(
-            ActionType.CREATE_CARD,
+            ActionType.CARD_CREATED,
             side,
-            f"{target.name} est créée par {source.name}.",
+            description,
             source_card=source,
             target_card=target,
             metadata={
                 "entity_id": state.entity_id,
                 "created_by_entity_id": state.creator,
+                "event_type": "CARD_CREATED",
             },
+            technical=target.technical,
         )
 
     def _emit_playstate(self, entity_id: int, value: int) -> None:
@@ -899,17 +1110,28 @@ class _TimelineBuilder:
     def _reference(self, entity_id: int | None) -> CardRef:
         state = self.entities.get(entity_id) if entity_id is not None else None
         if state is None or not state.observable_card_id:
-            return self.resolver.reference(
+            reference = self.resolver.reference(
                 None,
                 entity_id=entity_id,
                 visibility=Visibility.HIDDEN,
                 created_by_entity_id=state.creator if state else None,
             )
-        return self.resolver.reference(
-            state.observable_card_id,
-            entity_id=entity_id,
-            visibility=Visibility.KNOWN,
-            created_by_entity_id=state.creator,
+        else:
+            reference = self.resolver.reference(
+                state.observable_card_id,
+                entity_id=entity_id,
+                visibility=Visibility.KNOWN,
+                created_by_entity_id=state.creator,
+            )
+        if state is None or state.creator is None:
+            return reference
+        creator = self.entities.get(state.creator)
+        return replace(
+            reference,
+            provenance=Provenance(
+                creator_entity_id=state.creator,
+                creator_card_id=creator.observable_card_id if creator is not None else None,
+            ),
         )
 
     def _side_for_entity(self, entity_id: int | None) -> PlayerSide:
@@ -941,6 +1163,7 @@ class _TimelineBuilder:
         metadata: dict[str, object] | None = None,
         destination: TurnState | None = None,
         sequence: int | None = None,
+        technical: bool = False,
     ) -> GameAction:
         if sequence is None:
             sequence = self._reserve_sequence()
@@ -953,13 +1176,14 @@ class _TimelineBuilder:
             source_card=source_card,
             target_card=target_card,
             metadata=dict(metadata or {}),
+            technical=technical,
         )
         target_turn = destination if destination is not None else self.current_turn
         if target_turn is None:
             self.start_events.append(action)
         else:
             target_turn.actions.append(action)
-        if action_type in _IMPORTANT_ACTIONS:
+        if action_type in _IMPORTANT_ACTIONS and not action.technical:
             self.important_events.append(action)
         return action
 
@@ -988,6 +1212,49 @@ def extract_timeline(
         player_entity_id,
         opponent_entity_id,
     ).build()
+
+
+def gameplay_start_event_groups(
+    events: list[GameAction],
+) -> list[tuple[GameAction, int]]:
+    """Construire la vue gameplay sans perdre les occurrences protocolaires brutes.
+
+    Deux vraies résolutions restent deux lignes. Une occurrence qui ne fait que
+    révéler la même source est rattachée à la résolution substantielle et compte
+    dans ``protocol_occurrences``. Ce signal structurel est volontairement plus
+    strict qu'une fenêtre temporelle heuristique : deux triggers substantiels ne
+    sont jamais fusionnés, même s'ils sont simultanés.
+    """
+
+    ordinary: list[tuple[GameAction, int]] = []
+    grouped: dict[tuple[object, ...], list[GameAction]] = {}
+    for action in events:
+        if action.action_type is not ActionType.START_GAME_EFFECT:
+            ordinary.append((action, 1))
+            continue
+        key = (
+            action.action_type,
+            action.player,
+            action.source_card.entity_id if action.source_card else None,
+            action.source_card.card_id if action.source_card else None,
+            action.target_card.entity_id if action.target_card else None,
+            action.target_card.card_id if action.target_card else None,
+            action.description,
+        )
+        grouped.setdefault(key, []).append(action)
+
+    result = ordinary
+    for actions in grouped.values():
+        substantive = [
+            action for action in actions if not action.metadata.get("protocol_only_reveal")
+        ]
+        reveal_only_count = len(actions) - len(substantive)
+        if substantive:
+            result.append((substantive[0], 1 + reveal_only_count))
+            result.extend((action, 1) for action in substantive[1:])
+        else:
+            result.append((actions[0], len(actions)))
+    return sorted(result, key=lambda item: item[0].sequence)
 
 
 def _timestamp(packet: object) -> str | None:
@@ -1025,6 +1292,13 @@ def _block_reveals_entity(block: Block, entity_id: int | None) -> bool:
         if hasattr(packet, "packets") and _block_reveals_entity(packet, entity_id):
             return True
     return False
+
+
+def _is_reveal_only_trigger(block: Block, entity_id: int | None) -> bool:
+    if entity_id is None or len(block.packets) != 1:
+        return False
+    packet = block.packets[0]
+    return isinstance(packet, ShowEntity) and _entity_id(packet.entity) == entity_id
 
 
 def _enum_or_default(enum: type, value: object, default: object):

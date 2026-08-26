@@ -135,6 +135,7 @@ def compare_board_states(
             "stealth",
             "frozen",
             "silenced",
+            "dormant",
         ):
             old_value = getattr(old.minion, attribute)
             new_value = getattr(new.minion, attribute)

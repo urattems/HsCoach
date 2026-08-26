@@ -8,6 +8,7 @@ from hscoach.exceptions import ReplayInputError
 from hscoach.input.common import (
     DEFAULT_MAX_SIZE_BYTES,
     LoadedReplay,
+    safe_local_label,
     validate_replay_xml,
     validate_size_limit,
 )
@@ -28,6 +29,7 @@ def load_local_replay(
 
     validate_size_limit(max_size_bytes)
     replay_path = Path(path)
+    source_label = safe_local_label(replay_path)
     if replay_path.suffix and replay_path.suffix.lower() not in SUPPORTED_REPLAY_EXTENSIONS:
         extensions = ", ".join(sorted(SUPPORTED_REPLAY_EXTENSIONS))
         raise ReplayInputError(f"Extension de replay non prise en charge (attendu : {extensions}).")
@@ -35,14 +37,12 @@ def load_local_replay(
     try:
         file_size = replay_path.stat().st_size
     except FileNotFoundError as exc:
-        raise ReplayInputError(f"Fichier de replay introuvable : {replay_path.name}") from exc
+        raise ReplayInputError(f"Fichier de replay introuvable : {source_label}") from exc
     except OSError as exc:
-        raise ReplayInputError(
-            f"Impossible d'accéder au replay local : {replay_path.name}"
-        ) from exc
+        raise ReplayInputError(f"Impossible d'accéder au replay local : {source_label}") from exc
 
     if not replay_path.is_file():
-        raise ReplayInputError(f"La source locale n'est pas un fichier : {replay_path.name}")
+        raise ReplayInputError(f"La source locale n'est pas un fichier : {source_label}")
     if file_size > max_size_bytes:
         raise ReplayInputError(
             f"Le replay dépasse la taille maximale autorisée ({max_size_bytes} octets)."
@@ -52,10 +52,10 @@ def load_local_replay(
         with replay_path.open("rb") as stream:
             data = stream.read(max_size_bytes + 1)
     except OSError as exc:
-        raise ReplayInputError(f"Impossible de lire le replay local : {replay_path.name}") from exc
+        raise ReplayInputError(f"Impossible de lire le replay local : {source_label}") from exc
 
     validate_replay_xml(data, max_size_bytes)
-    return LoadedReplay(data=data, source_label=replay_path.name)
+    return LoadedReplay(data=data, source_label=source_label)
 
 
 # Alias court conservé pour les appelants qui connaissent déjà le type de source.

@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hearthstone-replay-analyzer"
-version = "2.0.0"
+dynamic = ["version"]
 description = "Extracteur factuel de replays Hearthstone HSReplay en français"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Hearthstone Replay Analyzer contributors" }]
 dependencies = [
     "hearthstone==9.20.10",
@@ -21,12 +22,27 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "PySide6>=6.8,<6.12",
+    "pytest-qt>=4.4,<5",
     "pytest>=9.0,<10",
     "ruff>=0.16,<0.17",
+]
+gui = [
+    "PySide6>=6.8,<6.12",
+]
+build = [
+    "PyInstaller>=6.10,<7",
+    "PySide6>=6.8,<6.12",
 ]
 
 [project.scripts]
 hscoach = "hscoach.cli:entrypoint"
+
+[project.gui-scripts]
+hscoach-gui = "hscoach.gui:entrypoint"
+
+[tool.setuptools.dynamic]
+version = { attr = "hscoach.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

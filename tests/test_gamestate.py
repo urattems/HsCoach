@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from hearthstone.enums import GameTag
 
 from hscoach.cards.resolver import CardResolver
 from hscoach.models import Card, PlayerSide, Visibility
@@ -111,6 +112,33 @@ def test_end_of_turn_trigger_is_visible_only_in_turn_end_state() -> None:
     assert (following_turn.attack, following_turn.health) == (2, 3)
 
 
+@requires_user_sample
+def test_maiev_dormant_regression_keeps_acolyte_effective_stats() -> None:
+    snapshots = snapshots_from_real_replay()
+    fifth_turn = snapshots[4]
+    seventh_turn = snapshots[6]
+
+    dormant_after_maiev = _minion(fifth_turn.action_phase_end_state, 17)
+    before_waking = _minion(seventh_turn.turn_start_state, 17)
+    after_waking = _minion(seventh_turn.action_phase_start_state, 17)
+    assert (
+        dormant_after_maiev.attack,
+        dormant_after_maiev.health,
+        dormant_after_maiev.max_health,
+        dormant_after_maiev.dormant,
+    ) == (4, 5, 5, True)
+    assert (
+        before_waking.attack,
+        before_waking.health,
+        before_waking.dormant,
+    ) == (4, 5, True)
+    assert (
+        after_waking.attack,
+        after_waking.health,
+        after_waking.dormant,
+    ) == (4, 5, False)
+
+
 def test_synthetic_phase_boundaries_capture_only_observed_states() -> None:
     result = _capture_synthetic(
         '<TagChange entity="1" tag="19" value="6"/>'
@@ -128,6 +156,42 @@ def test_synthetic_phase_boundaries_capture_only_observed_states() -> None:
     assert _minion(snapshot.action_phase_end_state, 10).health == 5
     assert _minion(snapshot.turn_end_state, 10).health == 7
     assert not result.warnings
+
+
+def test_dormant_snapshots_keep_cached_effective_stats_and_real_buffs() -> None:
+    attack = int(GameTag.ATK)
+    health = int(GameTag.HEALTH)
+    dormant = int(GameTag.DORMANT)
+    result = _capture_synthetic(
+        f'<TagChange entity="10" tag="{attack}" value="4"/>'
+        f'<TagChange entity="10" tag="{health}" value="5"/>'
+        '<TagChange entity="1" tag="19" value="6"/>'
+        f'<CachedTagForDormantChange entity="10" tag="{attack}" value="4"/>'
+        f'<CachedTagForDormantChange entity="10" tag="{health}" value="5"/>'
+        f'<TagChange entity="10" tag="{dormant}" value="1"/>'
+        f'<TagChange entity="10" tag="{attack}" value="1"/>'
+        f'<TagChange entity="10" tag="{health}" value="2"/>'
+        '<TagChange entity="1" tag="19" value="10"/>'
+        f'<CachedTagForDormantChange entity="10" tag="{attack}" value="5"/>'
+        f'<CachedTagForDormantChange entity="10" tag="{health}" value="6"/>'
+        '<TagChange entity="1" tag="19" value="12"/>'
+        f'<TagChange entity="10" tag="{dormant}" value="0"/>'
+        f'<CachedTagForDormantChange entity="10" tag="{attack}" value="0"/>'
+        f'<CachedTagForDormantChange entity="10" tag="{health}" value="0"/>'
+        f'<TagChange entity="10" tag="{attack}" value="5"/>'
+        f'<TagChange entity="10" tag="{health}" value="6"/>'
+        '<TagChange entity="1" tag="19" value="16"/>'
+    )
+    snapshot = result[0]
+
+    turn_start = _minion(snapshot.turn_start_state, 10)
+    action_start = _minion(snapshot.action_phase_start_state, 10)
+    action_end = _minion(snapshot.action_phase_end_state, 10)
+    turn_end = _minion(snapshot.turn_end_state, 10)
+    assert (turn_start.attack, turn_start.health, turn_start.dormant) == (4, 5, False)
+    assert (action_start.attack, action_start.health, action_start.dormant) == (4, 5, True)
+    assert (action_end.attack, action_end.health, action_end.dormant) == (5, 6, True)
+    assert (turn_end.attack, turn_end.health, turn_end.dormant) == (5, 6, False)
 
 
 def test_main_next_is_an_explicit_warned_fallback_for_missing_cleanup() -> None:

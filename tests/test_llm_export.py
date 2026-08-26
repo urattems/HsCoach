@@ -19,6 +19,7 @@ from hscoach.models import (
     Mulligan,
     Player,
     PlayerSide,
+    Provenance,
     RecordedOption,
     ReplayMetadata,
     SideState,
@@ -27,6 +28,7 @@ from hscoach.models import (
     ValueDelta,
 )
 from hscoach.output import ExportedReports, export_analysis
+from hscoach.output.json_export import analysis_to_dict
 from hscoach.output.llm_json import analysis_to_llm_dict, export_llm_json, render_llm_json
 
 
@@ -211,3 +213,130 @@ def test_cli_success_lists_llm_report(capsys, tmp_path: Path) -> None:
     _show_analysis_success(_analysis(), reports)
 
     assert "game_llm.json" in capsys.readouterr().out
+
+
+def test_llm_groups_beatrix_but_full_json_keeps_both_protocol_events() -> None:
+    analysis = _analysis()
+    beatrix = CardRef(
+        entity_id=70,
+        card_id="BEATRIX",
+        name="Commandante Beatrix",
+        card_type="MINION",
+    )
+    description = "Commandante Beatrix déclenche son effet de début de partie."
+    analysis.start_of_game_events = [
+        GameAction(
+            sequence=1,
+            action_type=ActionType.START_GAME_EFFECT,
+            player=PlayerSide.PLAYER,
+            description=description,
+            source_card=beatrix,
+            metadata={"protocol_only_reveal": False},
+        ),
+        GameAction(
+            sequence=2,
+            action_type=ActionType.START_GAME_EFFECT,
+            player=PlayerSide.PLAYER,
+            description=description,
+            source_card=beatrix,
+            metadata={"protocol_only_reveal": True},
+        ),
+    ]
+
+    full = analysis_to_dict(analysis)
+    compact = analysis_to_llm_dict(analysis)
+
+    assert len(full["start_of_game_events"]) == 2
+    assert len(compact["start_of_game_events"]) == 1
+    assert compact["start_of_game_events"][0]["details"]["protocol_occurrences"] == 2
+
+
+def test_llm_excludes_technical_entities_but_keeps_their_gameplay_delta() -> None:
+    analysis = _analysis()
+    maiev = analysis.player.deck[0].card
+    technical = CardRef(
+        entity_id=90,
+        card_id="TECH_001e",
+        name="Cost - 2",
+        card_type="ENCHANTMENT",
+    )
+    technical_action = GameAction(
+        sequence=10,
+        action_type=ActionType.CARD_CREATED,
+        player=PlayerSide.SYSTEM,
+        description="Cost - 2 entre dans la partie.",
+        target_card=technical,
+        technical=True,
+    )
+    analysis.turns[0].actions.append(technical_action)
+    analysis.important_events.append(technical_action)
+    analysis.turns[0].entity_deltas.extend(
+        [
+            EntityDelta(
+                sequence=11,
+                entity_id=maiev.entity_id or 12,
+                side=PlayerSide.PLAYER,
+                phase=TurnPhase.ACTION_PHASE_END,
+                attribute="health",
+                value=ValueDelta(before=3, after=5, delta=2),
+                card=maiev,
+                source_card=technical,
+            ),
+            EntityDelta(
+                sequence=12,
+                entity_id=90,
+                side=PlayerSide.SYSTEM,
+                phase=TurnPhase.ACTION_PHASE_END,
+                attribute="attack",
+                value=ValueDelta(before=0, after=1, delta=1),
+                card=technical,
+                technical=True,
+            ),
+        ]
+    )
+
+    full = analysis_to_dict(analysis)
+    compact = analysis_to_llm_dict(analysis)
+    rendered = json.dumps(compact, ensure_ascii=False)
+
+    assert any(action["technical"] for action in full["turns"][0]["actions"])
+    assert [action["seq"] for action in compact["turns"][0]["actions"]] == [8]
+    assert compact["important_events"] == [8]
+    changes = compact["turns"][0]["state_changes"]["entity_changes"]
+    assert [change[0] for change in changes] == [9, 11]
+    assert "TECH_001e" not in rendered
+    assert "Cost - 2" not in rendered
+
+
+def test_llm_serializes_structured_provenance_for_a_real_creation() -> None:
+    analysis = _analysis()
+    generated = CardRef(
+        entity_id=13,
+        card_id="GENERATED",
+        name="Carte générée",
+        provenance=Provenance(
+            creator_entity_id=12,
+            creator_card_id="JAIL_850",
+        ),
+    )
+    creation = GameAction(
+        sequence=13,
+        action_type=ActionType.CARD_CREATED,
+        player=PlayerSide.PLAYER,
+        description="Carte générée entre dans la partie.",
+        source_card=analysis.player.deck[0].card,
+        target_card=generated,
+        metadata={"event_type": "CARD_CREATED"},
+    )
+    analysis.turns[0].actions.append(creation)
+    analysis.important_events.append(creation)
+
+    compact = analysis_to_llm_dict(analysis)
+
+    assert generated.created_by_entity_id == 12
+    assert compact["cards"]["entities"]["13"]["provenance"] == {
+        "creator_entity_id": 12,
+        "creator_card_id": "JAIL_850",
+        "confidence": "replay_explicit",
+    }
+    assert compact["important_events"] == [8, 13]

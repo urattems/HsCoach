@@ -105,6 +105,14 @@ def test_hostile_game_id_cannot_escape_output_directory(tmp_path: Path) -> None:
     assert not (tmp_path.parent / "rapport-secret").exists()
 
 
+@pytest.mark.parametrize("reserved_id", ["CON", "con.txt", "NUL", "COM1", "LPT9"])
+def test_windows_reserved_game_id_uses_safe_fallback(reserved_id: str) -> None:
+    folder_name = safe_game_id(reserved_id)
+
+    assert folder_name.startswith("partie-")
+    assert folder_name.casefold() != reserved_id.casefold()
+
+
 def test_export_refuses_sensitive_content_before_writing(tmp_path: Path) -> None:
     analysis = _analysis()
     analysis.warnings.append(ParseWarning(code="privacy", message="accountHi=123"))
