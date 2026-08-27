@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from hscoach.application import AnalysisRequest, AnalysisService, AnalysisStatus
 from hscoach.cards import parse_cards
+from hscoach.input.sources import RawXmlSource
 from hscoach.models import Card
 from hscoach.output import export_analysis
 from hscoach.replay.parser import analyze_replay_data
@@ -88,3 +90,40 @@ def test_real_sample_generates_private_french_reports(tmp_path: Path) -> None:
     assert "Warden Maiev" not in combined
     assert "accountHi" not in combined
     assert "accountLo" not in combined
+
+
+@requires_user_sample
+def test_real_sample_pasted_as_raw_xml_uses_application_service(tmp_path: Path) -> None:
+    if not CARDS_CACHE.is_file():
+        pytest.skip("Cache frFR complet non disponible.")
+    replay_bytes = SAMPLE.read_bytes()
+    hash_before = hashlib.sha256(replay_bytes).hexdigest()
+    cards = parse_cards(CARDS_CACHE.read_bytes())
+
+    class StaticCardProvider:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def load(self):
+            return cards
+
+    service = AnalysisService(card_provider_factory=StaticCardProvider)
+    batch = service.analyze_batch(
+        AnalysisRequest(
+            sources=(RawXmlSource(replay_bytes),),
+            output_directory=tmp_path,
+        )
+    )
+
+    assert hashlib.sha256(SAMPLE.read_bytes()).hexdigest() == hash_before
+    assert batch.success_count == 1
+    assert batch.results[0].status is AnalysisStatus.SUCCESS
+    assert batch.results[0].source_label == "XML brut collé"
+    assert batch.results[0].analysis is not None
+    assert batch.results[0].analysis.metadata.game_id == "151665"
+    assert batch.results[0].reports is not None
+    markdown = batch.results[0].reports.markdown
+    assert markdown is not None and markdown.is_file()
+    content = markdown.read_text(encoding="utf-8")
+    assert "Joueur : Chaman" in content
+    assert "Adversaire : Paladin" in content
