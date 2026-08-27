@@ -23,7 +23,12 @@ from hscoach.application.results import (
 from hscoach.cards import HearthstoneJSON
 from hscoach.config import AppConfig
 from hscoach.exceptions import CardDataError, ExportError, HSCoachError
-from hscoach.input.sources import ReplaySource, classify_replay_source, safe_source_label
+from hscoach.input.sources import (
+    RawXmlSource,
+    ReplaySource,
+    classify_replay_source,
+    safe_source_label,
+)
 from hscoach.models import Card, GameAnalysis
 from hscoach.output import ExportedReports, export_analysis
 from hscoach.replay.parser import analyze_replay_data
@@ -148,6 +153,11 @@ class AnalysisService:
                     source_label=loaded.source_label,
                     max_size_bytes=self.config.max_download_size_bytes,
                 )
+                if (
+                    isinstance(source, RawXmlSource)
+                    and analysis.metadata.game_id == "partie-inconnue"
+                ):
+                    analysis.metadata.game_id = source.fallback_game_id
                 self._emit(
                     progress,
                     ProgressStage.GAME_RECONSTRUCTED,

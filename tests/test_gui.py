@@ -7,6 +7,7 @@ from threading import Event
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtWidgets import QMessageBox
 
 from hscoach.application import (
     AnalysisProgress,
@@ -59,6 +60,71 @@ def test_default_gui_exports_markdown_and_llm_only(qtbot, tmp_path: Path) -> Non
     assert window.markdown_checkbox.isChecked() is True
     assert window.llm_checkbox.isChecked() is True
     assert window.full_json_checkbox.isChecked() is False
+    assert window.raw_xml_analyse_button.isEnabled() is False
+
+
+def test_raw_xml_button_tracks_empty_field(qtbot, tmp_path: Path) -> None:
+    window = MainWindow(settings_store=_settings_store(tmp_path))
+    qtbot.addWidget(window)
+
+    window.raw_xml_input.setPlainText("   ")
+    assert window.raw_xml_analyse_button.isEnabled() is False
+
+    window.raw_xml_input.setPlainText('<HSReplay build="1"><Game id="42" /></HSReplay>')
+    assert window.raw_xml_analyse_button.isEnabled() is True
+
+
+def test_invalid_raw_xml_shows_french_error(qtbot, tmp_path: Path, monkeypatch) -> None:
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, message: messages.append((title, message)),
+    )
+    window = MainWindow(settings_store=_settings_store(tmp_path))
+    qtbot.addWidget(window)
+    window.raw_xml_input.setPlainText("pas du XML")
+
+    qtbot.mouseClick(window.raw_xml_analyse_button, Qt.MouseButton.LeftButton)
+
+    assert messages == [("XML brut invalide", "Le replay ne contient pas un document XML valide.")]
+    assert window.raw_xml_input.toPlainText() == "pas du XML"
+    assert window.source_table.rowCount() == 0
+
+
+def test_valid_raw_xml_is_sent_to_analysis_service(qtbot, tmp_path: Path) -> None:
+    captured_requests = []
+
+    class CapturingService:
+        def analyze_batch(self, request, *, progress, cancellation):
+            del progress, cancellation
+            captured_requests.append(request)
+            return BatchAnalysisResult(
+                [
+                    AnalysisResult(
+                        source_label="XML brut collé",
+                        status=AnalysisStatus.ERROR,
+                        error_message="Fin du test.",
+                    )
+                ]
+            )
+
+    window = MainWindow(
+        settings_store=_settings_store(tmp_path),
+        service_factory=lambda config: CapturingService(),
+    )
+    qtbot.addWidget(window)
+    window.output_input.setText(str(tmp_path / "out"))
+    window.raw_xml_input.setPlainText('<HSReplay build="1"><Game id="42" /></HSReplay>')
+
+    qtbot.mouseClick(window.raw_xml_analyse_button, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: window._thread is None, timeout=5_000)
+
+    assert len(captured_requests) == 1
+    source = captured_requests[0].sources[0]
+    assert source.display_label == "XML brut collé"
+    assert source.load().data.startswith(b"<HSReplay")
+    assert window.raw_xml_input.toPlainText() == ""
 
 
 def test_settings_persist_only_non_sensitive_preferences(tmp_path: Path) -> None:

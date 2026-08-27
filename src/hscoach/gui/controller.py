@@ -14,6 +14,7 @@ from hscoach.input.sources import (
     DirectXmlUrlSource,
     HsReplayPageSource,
     LocalReplaySource,
+    RawXmlSource,
     ReplaySource,
     classify_replay_source,
     validate_local_source_candidate,
@@ -100,6 +101,8 @@ class ReplayQueue:
             return "local:" + os.path.normcase(str(source.path.expanduser().resolve(strict=False)))
         if isinstance(source, DirectXmlUrlSource | HsReplayPageSource):
             return "url:" + hashlib.sha256(source.url.encode("utf-8")).hexdigest()
+        if isinstance(source, RawXmlSource):
+            return "raw:" + hashlib.sha256(source.data).hexdigest()
         return f"source:{source.kind}:{source.display_label}"
 
 

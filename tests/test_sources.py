@@ -8,6 +8,7 @@ from hscoach.input.sources import (
     DirectXmlUrlSource,
     HsReplayPageSource,
     LocalReplaySource,
+    RawXmlSource,
     classify_replay_source,
     safe_source_label,
 )
@@ -106,3 +107,33 @@ def test_html_response_is_rejected_without_leaking_query() -> None:
 def test_non_http_url_is_rejected() -> None:
     with pytest.raises(ReplayInputError, match="HTTP"):
         classify_replay_source("ftp://example.test/replay.xml")
+
+
+def test_raw_xml_source_loads_valid_replay_without_exposing_content() -> None:
+    source = RawXmlSource(VALID_REPLAY.decode("utf-8"))
+
+    loaded = source.load()
+
+    assert loaded.data == VALID_REPLAY
+    assert loaded.source_label == "XML brut collé"
+    assert VALID_REPLAY.decode("utf-8") not in repr(source)
+    assert source.fallback_game_id.startswith("xml-colle-")
+    assert source.fallback_game_id.replace("-", "").isalnum()
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("pas du XML", "XML valide"),
+        ("<!DOCTYPE HSReplay><HSReplay />", "DTD"),
+        ("<html />", "racine attendue"),
+    ],
+)
+def test_raw_xml_source_rejects_invalid_or_unsafe_content(content: str, message: str) -> None:
+    with pytest.raises(ReplayInputError, match=message):
+        RawXmlSource(content).load()
+
+
+def test_raw_xml_source_applies_size_limit() -> None:
+    with pytest.raises(ReplayInputError, match="taille maximale"):
+        RawXmlSource(VALID_REPLAY).load(max_size_bytes=10)

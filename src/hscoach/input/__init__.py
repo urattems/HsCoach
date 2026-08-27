@@ -13,6 +13,7 @@ from hscoach.input.sources import (
     DirectXmlUrlSource,
     HsReplayPageSource,
     LocalReplaySource,
+    RawXmlSource,
     ReplaySource,
     classify_replay_source,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "HsReplayPageSource",
     "LoadedReplay",
     "LocalReplaySource",
+    "RawXmlSource",
     "ReplaySource",
     "classify_replay_source",
     "load_local_replay",

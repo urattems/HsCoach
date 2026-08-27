@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PureWindowsPath
@@ -12,7 +13,12 @@ from urllib.parse import urlsplit
 import httpx
 
 from hscoach.exceptions import ReplayInputError
-from hscoach.input.common import DEFAULT_MAX_SIZE_BYTES, LoadedReplay, safe_local_label
+from hscoach.input.common import (
+    DEFAULT_MAX_SIZE_BYTES,
+    LoadedReplay,
+    safe_local_label,
+    validate_replay_xml,
+)
 from hscoach.input.local import SUPPORTED_REPLAY_EXTENSIONS, load_local_replay
 from hscoach.input.remote import DEFAULT_HTTP_TIMEOUT_SECONDS, load_remote_replay, safe_remote_label
 
@@ -32,6 +38,7 @@ class ReplaySourceKind(StrEnum):
     LOCAL = "local"
     DIRECT_XML_URL = "direct_xml_url"
     HSREPLAY_PAGE = "hsreplay_page"
+    RAW_XML = "raw_xml"
 
 
 @runtime_checkable
@@ -110,6 +117,41 @@ class DirectXmlUrlSource:
             timeout_seconds=timeout_seconds,
             client=client,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RawXmlSource:
+    """Contenu XML brut collé dans un frontend, sans nom ni chemin d'origine."""
+
+    data: bytes = field(repr=False)
+    fallback_game_id: str = field(default_factory=lambda: f"xml-colle-{uuid.uuid4().hex[:12]}")
+    kind: ReplaySourceKind = field(default=ReplaySourceKind.RAW_XML, init=False)
+
+    def __init__(self, content: str | bytes) -> None:
+        if isinstance(content, str):
+            data = content.encode("utf-8")
+        elif isinstance(content, bytes):
+            data = content
+        else:
+            raise ReplayInputError("Le contenu XML brut doit être du texte.")
+        object.__setattr__(self, "data", data)
+        object.__setattr__(self, "fallback_game_id", f"xml-colle-{uuid.uuid4().hex[:12]}")
+        object.__setattr__(self, "kind", ReplaySourceKind.RAW_XML)
+
+    @property
+    def display_label(self) -> str:
+        return "XML brut collé"
+
+    def load(
+        self,
+        *,
+        max_size_bytes: int = DEFAULT_MAX_SIZE_BYTES,
+        timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
+        client: httpx.Client | None = None,
+    ) -> LoadedReplay:
+        del timeout_seconds, client
+        validate_replay_xml(self.data, max_size_bytes)
+        return LoadedReplay(data=self.data, source_label=self.display_label)
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +288,7 @@ __all__ = [
     "DirectXmlUrlSource",
     "HsReplayPageSource",
     "LocalReplaySource",
+    "RawXmlSource",
     "ReplaySource",
     "ReplaySourceKind",
     "classify_replay_source",

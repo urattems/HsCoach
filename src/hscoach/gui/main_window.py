@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QTableWidget,
@@ -50,6 +51,7 @@ from hscoach.gui.settings import (
     default_cache_directory,
 )
 from hscoach.gui.worker import AnalysisWorker
+from hscoach.input.sources import RawXmlSource
 
 
 class DropZone(QFrame):
@@ -152,6 +154,20 @@ class MainWindow(QMainWindow):
         url_layout.addWidget(self.url_input, 1)
         url_layout.addWidget(self.url_add_button)
         outer.addLayout(url_layout)
+
+        raw_xml_group = QGroupBox("Ou collez le contenu XML brut")
+        raw_xml_layout = QVBoxLayout(raw_xml_group)
+        self.raw_xml_input = QPlainTextEdit()
+        self.raw_xml_input.setPlaceholderText("Collez ici le contenu XML brut du replay…")
+        self.raw_xml_input.setAccessibleName("Contenu XML brut du replay")
+        self.raw_xml_input.setMaximumHeight(130)
+        self.raw_xml_analyse_button = QPushButton("Analyser ce texte")
+        self.raw_xml_analyse_button.setEnabled(False)
+        self.raw_xml_input.textChanged.connect(self._update_raw_xml_enabled)
+        self.raw_xml_analyse_button.clicked.connect(self._analyse_raw_xml)
+        raw_xml_layout.addWidget(self.raw_xml_input)
+        raw_xml_layout.addWidget(self.raw_xml_analyse_button, alignment=Qt.AlignmentFlag.AlignRight)
+        outer.addWidget(raw_xml_group)
 
         self.source_table = QTableWidget(0, 3)
         self.source_table.setHorizontalHeaderLabels(["Source", "État", "Action"])
@@ -270,7 +286,27 @@ class MainWindow(QMainWindow):
             # pouvoir restaurer une URL signée après son ajout.
             self.url_input.setText("")
 
-    def _add_sources(self, sources: Iterable[str | Path]) -> bool:
+    def _analyse_raw_xml(self) -> None:
+        content = self.raw_xml_input.toPlainText()
+        if not content.strip() or self._running:
+            return
+        try:
+            source = RawXmlSource(content)
+            source.load(max_size_bytes=self._queue.max_size_bytes)
+        except ReplayInputError as exc:
+            QMessageBox.warning(self, "XML brut invalide", str(exc))
+            return
+        if self._add_sources([source]):
+            self.raw_xml_input.clear()
+            if self.analyse_button.isEnabled():
+                self._start_analysis()
+
+    def _update_raw_xml_enabled(self) -> None:
+        self.raw_xml_analyse_button.setEnabled(
+            not self._running and bool(self.raw_xml_input.toPlainText().strip())
+        )
+
+    def _add_sources(self, sources: Iterable[str | Path | RawXmlSource]) -> bool:
         added = False
         errors: list[str] = []
         for source in sources:
@@ -464,6 +500,8 @@ class MainWindow(QMainWindow):
         self.browse_button.setEnabled(not running)
         self.url_input.setEnabled(not running)
         self.url_add_button.setEnabled(not running)
+        self.raw_xml_input.setEnabled(not running)
+        self._update_raw_xml_enabled()
         self.output_input.setEnabled(not running)
         self.output_button.setEnabled(not running)
         self.markdown_checkbox.setEnabled(not running)
