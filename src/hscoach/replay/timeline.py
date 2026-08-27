@@ -53,6 +53,7 @@ class TimelineResult:
     important_events: list[GameAction] = field(default_factory=list)
     entity_card_ids: dict[int, str] = field(default_factory=dict)
     warnings: list[ParseWarning] = field(default_factory=list)
+    action_protocol_orders: dict[int, int] = field(default_factory=dict, repr=False)
 
 
 @dataclass(slots=True)
@@ -142,6 +143,19 @@ class _TimelineBuilder:
         self.block_stack: list[_BlockContext] = []
         self.pending_creation_entity_id: int | None = None
         self.nested_power_events: dict[int, list[dict[str, object]]] = {}
+        self.action_protocol_orders: dict[int, int] = {}
+        self.packet_protocol_orders = _packet_protocol_orders(context)
+        self.current_protocol_order: int | None = None
+        if not self.packet_protocol_orders:
+            self.warnings.append(
+                ParseWarning(
+                    code="ordre_protocole_indisponible",
+                    message=(
+                        "L'ordre protocolaire commun n'a pas pu être établi ; "
+                        "les choix sans horodatage conservent un placement prudent."
+                    ),
+                )
+            )
 
     def build(self) -> TimelineResult:
         packets = list(self.context.packet_tree)
@@ -172,6 +186,7 @@ class _TimelineBuilder:
             important_events=self.important_events,
             entity_card_ids=card_ids,
             warnings=self.warnings,
+            action_protocol_orders=self.action_protocol_orders,
         )
 
     def _ingest_initial_packets(self, packets: list[object]) -> int:
@@ -213,28 +228,33 @@ class _TimelineBuilder:
         return index
 
     def _visit(self, packet: object) -> None:
-        self._remember_timestamp(packet)
-        if self.pending_creation_entity_id is not None and not (
-            isinstance(packet, ShowEntity)
-            and _entity_id(packet.entity) == self.pending_creation_entity_id
-        ):
-            # Seul le ShowEntity immédiatement associé au FullEntity constitue
-            # encore la même introduction. Une révélation tardive ne doit pas
-            # fabriquer une création à cet instant.
-            self.pending_creation_entity_id = None
-        if isinstance(packet, Block):
-            self._visit_block(packet)
-        elif isinstance(packet, ShowEntity | FullEntity | ChangeEntity):
-            self._visit_entity_packet(packet)
-        elif isinstance(packet, HideEntity):
-            self._visit_hide_entity(packet)
-        elif isinstance(packet, CachedTagForDormantChange):
-            self._visit_cached_dormant_change(packet)
-        elif isinstance(packet, TagChange):
-            self._visit_tag_change(packet)
-        elif hasattr(packet, "packets"):
-            for child in packet.packets:
-                self._visit(child)
+        previous_protocol_order = self.current_protocol_order
+        self.current_protocol_order = self.packet_protocol_orders.get(id(packet))
+        try:
+            self._remember_timestamp(packet)
+            if self.pending_creation_entity_id is not None and not (
+                isinstance(packet, ShowEntity)
+                and _entity_id(packet.entity) == self.pending_creation_entity_id
+            ):
+                # Seul le ShowEntity immédiatement associé au FullEntity constitue
+                # encore la même introduction. Une révélation tardive ne doit pas
+                # fabriquer une création à cet instant.
+                self.pending_creation_entity_id = None
+            if isinstance(packet, Block):
+                self._visit_block(packet)
+            elif isinstance(packet, ShowEntity | FullEntity | ChangeEntity):
+                self._visit_entity_packet(packet)
+            elif isinstance(packet, HideEntity):
+                self._visit_hide_entity(packet)
+            elif isinstance(packet, CachedTagForDormantChange):
+                self._visit_cached_dormant_change(packet)
+            elif isinstance(packet, TagChange):
+                self._visit_tag_change(packet)
+            elif hasattr(packet, "packets"):
+                for child in packet.packets:
+                    self._visit(child)
+        finally:
+            self.current_protocol_order = previous_protocol_order
 
     def _visit_block(self, block: Block) -> None:
         block_type = _enum_or_default(BlockType, block.type, BlockType.INVALID)
@@ -1223,6 +1243,8 @@ class _TimelineBuilder:
             target_turn.actions.append(action)
         if _is_important_action(action):
             self.important_events.append(action)
+        if self.current_protocol_order is not None:
+            self.action_protocol_orders[id(action)] = self.current_protocol_order
         return action
 
     def _reserve_sequence(self) -> int:
@@ -1233,6 +1255,45 @@ class _TimelineBuilder:
         timestamp = _timestamp(packet)
         if timestamp:
             self.last_timestamp = timestamp
+
+
+_ORDERED_PACKET_TYPES = (
+    Block,
+    FullEntity,
+    ShowEntity,
+    ChangeEntity,
+    HideEntity,
+    TagChange,
+    CachedTagForDormantChange,
+)
+
+
+def _packet_protocol_orders(context: ReplayContext) -> dict[int, int]:
+    """Relier les paquets HearthSim à leur position dans la traversée XML canonique."""
+
+    packets: list[object] = []
+
+    def visit(items: object) -> None:
+        for packet in items:
+            if isinstance(packet, _ORDERED_PACKET_TYPES):
+                packets.append(packet)
+            children = getattr(packet, "packets", None)
+            if children is not None:
+                visit(children)
+
+    visit(context.packet_tree)
+    packet_tags = [type(packet).__name__ for packet in packets]
+    xml_items = [
+        (protocol_order, element.tag)
+        for protocol_order, element in enumerate(context.game_xml.iter())
+        if element.tag in {packet_type.__name__ for packet_type in _ORDERED_PACKET_TYPES}
+    ]
+    if packet_tags != [tag for _, tag in xml_items]:
+        return {}
+    return {
+        id(packet): protocol_order
+        for packet, (protocol_order, _) in zip(packets, xml_items, strict=True)
+    }
 
 
 def extract_timeline(

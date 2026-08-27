@@ -206,8 +206,14 @@ def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
         turn = turns_by_number.get(turn_number)
         if turn is not None:
             turn.choices.extend(items)
-            _attach_choice_actions(turn, items)
-    _normalize_action_sequences(timeline.start_of_game_events, timeline.turns)
+            timeline.action_protocol_orders.update(
+                _attach_choice_actions(turn, items, decisions.choice_protocol_orders)
+            )
+    _normalize_action_sequences(
+        timeline.start_of_game_events,
+        timeline.turns,
+        timeline.action_protocol_orders,
+    )
 
     unresolved_ids = list(resolver.unresolved_ids)
     warnings = [
@@ -292,7 +298,12 @@ def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
     )
 
 
-def _attach_choice_actions(turn: object, choices: list[object]) -> None:
+def _attach_choice_actions(
+    turn: object,
+    choices: list[object],
+    choice_protocol_orders: dict[int, int],
+) -> dict[int, int]:
+    action_protocol_orders: dict[int, int] = {}
     for choice in choices:
         action_type = (
             ActionType.DISCOVER if choice.choice_type == "Découverte" else ActionType.CHOICE
@@ -304,28 +315,36 @@ def _attach_choice_actions(turn: object, choices: list[object]) -> None:
             description = f"{choice.choice_type} terminé sans entité choisie explicite."
         else:
             description = f"{choice.choice_type} proposé ; réponse absente du replay."
-        turn.actions.append(
-            GameAction(
-                sequence=choice.sequence,
-                action_type=action_type,
-                player=choice.player,
-                description=description,
-                timestamp=choice.timestamp,
-                source_card=choice.source_card,
-                target_card=choice.chosen[0] if len(choice.chosen) == 1 else None,
-                metadata={
-                    "choice_type": choice.choice_type,
-                    "offered_entity_ids": [card.entity_id for card in choice.offered],
-                    "chosen_entity_ids": [card.entity_id for card in choice.chosen],
-                    "completed": choice.completed,
-                },
-            )
+        action = GameAction(
+            sequence=0,
+            action_type=action_type,
+            player=choice.player,
+            description=description,
+            timestamp=choice.timestamp,
+            source_card=choice.source_card,
+            target_card=choice.chosen[0] if len(choice.chosen) == 1 else None,
+            metadata={
+                "choice_type": choice.choice_type,
+                "offered_entity_ids": [card.entity_id for card in choice.offered],
+                "chosen_entity_ids": [card.entity_id for card in choice.chosen],
+                "completed": choice.completed,
+            },
         )
+        turn.actions.append(action)
+        protocol_order = choice_protocol_orders.get(id(choice))
+        if protocol_order is not None:
+            action_protocol_orders[id(action)] = protocol_order
+    return action_protocol_orders
 
 
-def _normalize_action_sequences(start_events: list[GameAction], turns: list[object]) -> None:
+def _normalize_action_sequences(
+    start_events: list[GameAction],
+    turns: list[object],
+    action_protocol_orders: dict[int, int] | None = None,
+) -> None:
     """Renuméroter après fusion XML ciblée, sans ordre aléatoire."""
 
+    protocol_orders = action_protocol_orders or {}
     sequence = 0
     for action in sorted(start_events, key=lambda item: item.sequence):
         sequence += 1
@@ -333,18 +352,12 @@ def _normalize_action_sequences(start_events: list[GameAction], turns: list[obje
     for turn in turns:
         original_order = {id(action): index for index, action in enumerate(turn.actions)}
         original_sequences = {id(action): action.sequence for action in turn.actions}
-        # La séquence protocolaire reste l'autorité lorsque des timestamps manquent.
-        # Un timestamp ne peut raffiner l'ordre que si toutes les actions en ont un.
-        if turn.actions and all(action.timestamp is not None for action in turn.actions):
-            turn.actions.sort(key=lambda action: (action.timestamp, original_order[id(action)]))
-        else:
+        if turn.actions and all(id(action) in protocol_orders for action in turn.actions):
             turn.actions.sort(
-                key=lambda action: (
-                    action.sequence <= 0,
-                    action.sequence if action.sequence > 0 else original_order[id(action)],
-                    original_order[id(action)],
-                )
+                key=lambda action: (protocol_orders[id(action)], original_order[id(action)])
             )
+        elif turn.actions and all(action.timestamp is not None for action in turn.actions):
+            turn.actions.sort(key=lambda action: (action.timestamp, original_order[id(action)]))
         sequence_mapping: dict[int, int] = {}
         for action in turn.actions:
             sequence += 1

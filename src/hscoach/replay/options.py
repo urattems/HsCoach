@@ -19,6 +19,7 @@ class DecisionResult:
 
     by_turn: dict[int, list[Decision]] = field(default_factory=dict)
     choices_by_turn: dict[int, list[RecordedChoice]] = field(default_factory=dict)
+    choice_protocol_orders: dict[int, int] = field(default_factory=dict, repr=False)
 
     @property
     def count(self) -> int:
@@ -61,7 +62,7 @@ def extract_decisions(
     game_entity = context.game_xml.find("GameEntity")
     game_entity_id = game_entity.attrib.get("id") if game_entity is not None else "1"
 
-    for element in context.game_xml.iter():
+    for protocol_order, element in enumerate(context.game_xml.iter()):
         _update_entity(element, entities)
         if element.tag == "TagChange" and _tag_number(element) == int(GameTag.TURN):
             if element.attrib.get("entity") == game_entity_id:
@@ -106,6 +107,7 @@ def extract_decisions(
                 source_card=source_ref,
             )
             pending_choices[choice_id] = (turn_number, choice)
+            result.choice_protocol_orders[id(choice)] = protocol_order
         elif element.tag in {"SendChoices", "ChosenEntities"}:
             choice_id = element.attrib.get("id")
             pending_choice = pending_choices.get(choice_id or "")

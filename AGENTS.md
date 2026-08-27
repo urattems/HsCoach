@@ -59,6 +59,10 @@ publics sont `StateDelta`, `EntityDelta`, `HeroDelta`, `ManaDelta`, `ZoneDelta` 
   `gamestate_reconstructed`; les changements directs du protocole peuvent porter
   `replay_explicit`.
 - Les séquences d'actions et de changements doivent être déterministes.
+- Les actions du `PacketTree` et les `Choices` XML sont fusionnées selon leur position
+  dans la traversée protocolaire commune. Le compteur local d'un extracteur ne doit
+  jamais servir de clé chronologique face au compteur d'un autre extracteur ; les
+  séquences publiques contiguës sont attribuées seulement après cette fusion.
 - Les métadonnées d'un événement non classifié doivent aider au diagnostic sans
   recopier le XML complet ni un secret.
 
@@ -233,7 +237,7 @@ avec le schéma V1. Il justifie `schema_version = "2.0"` et la version de paquet
 `2.0.0`. Toute nouvelle rupture doit augmenter les deux versions concernées et ajouter
 un test de contrat.
 
-La RC historique par build est une évolution additive du paquet en `2.2.0`. Elle conserve les identifiants
+Le hotfix chronologique est une évolution corrective du paquet en `2.2.1`. Il conserve les identifiants
 de schéma `2.0` et `hscoach-llm/1.0` tant que leurs clés existantes gardent leur sens.
 Les nouveaux champs de provenance, Dormant, classification technique et occurrences
 protocolaires sont additifs ; la correction de `CARD_CREATED` retire une interprétation
