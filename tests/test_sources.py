@@ -14,6 +14,11 @@ from hscoach.input.sources import (
 )
 
 VALID_REPLAY = b'<HSReplay build="1"><Game id="42" /></HSReplay>'
+OFFICIAL_DOCTYPE_REPLAY = (
+    b"<?xml version='1.0' encoding='utf-8'?>\n"
+    b'<!DOCTYPE hsreplay SYSTEM "https://hearthsim.info/hsreplay/dtd/hsreplay-1.8.dtd">\n'
+    + VALID_REPLAY
+)
 
 
 def test_windows_path_is_not_mistaken_for_url_scheme() -> None:
@@ -54,6 +59,17 @@ def test_direct_xml_url_resolves_with_injected_http_client() -> None:
 
     assert loaded.data == VALID_REPLAY
     assert loaded.source_label == "replays.example"
+
+
+def test_direct_xml_url_accepts_official_hsreplay_doctype() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=OFFICIAL_DOCTYPE_REPLAY)
+
+    source = DirectXmlUrlSource("https://replays.example/game.hsreplay.xml")
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        loaded = source.load(client=client)
+
+    assert loaded.data == OFFICIAL_DOCTYPE_REPLAY
 
 
 def test_hsreplay_page_is_recognized_but_never_requested() -> None:
