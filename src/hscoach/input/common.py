@@ -10,7 +10,8 @@ from hscoach.exceptions import ReplayInputError
 from hscoach.privacy import SENSITIVE_FIELD_NAMES, redact_sensitive_text
 
 DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024
-_FORBIDDEN_XML_DECLARATIONS = (b"<!doctype", b"<!entity")
+_DOCTYPE_MARKER = b"<!doctype"
+_ENTITY_MARKER = b"<!entity"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,10 +38,11 @@ def validate_replay_xml(
 ) -> ElementTree.Element:
     """Valider un document XML HSReplay sans résoudre de ressource externe.
 
-    La prévalidation interdit toute DTD et déclaration d'entité avant de confier
-    les octets à :mod:`xml.etree.ElementTree`. Seule la racine officielle
-    ``HSReplay``, sans espace de noms, est acceptée afin de rester compatible avec
-    ``python-hsreplay``.
+    La prévalidation accepte les DOCTYPE externes simples produits par HSReplay,
+    mais interdit tout sous-ensemble interne et toute déclaration d'entité avant de
+    confier les octets à :mod:`xml.etree.ElementTree`. Aucun DTD externe n'est
+    résolu. Seule la racine officielle ``HSReplay``, sans espace de noms, est
+    acceptée afin de rester compatible avec ``python-hsreplay``.
     """
 
     validate_size_limit(max_size_bytes)
@@ -56,8 +58,7 @@ def validate_replay_xml(
     # Retirer les octets NUL permet aussi de détecter ces déclarations dans un
     # document UTF-16, avant que le parseur XML ne voie le contenu non fiable.
     declaration_scan = data.lower().replace(b"\x00", b"")
-    if any(marker in declaration_scan for marker in _FORBIDDEN_XML_DECLARATIONS):
-        raise ReplayInputError("Le replay contient une DTD ou une déclaration d'entité interdite.")
+    _validate_xml_declarations(declaration_scan)
 
     try:
         root = ElementTree.fromstring(data)
@@ -69,6 +70,30 @@ def validate_replay_xml(
             "Le document XML n'est pas un replay HSReplay : la racine attendue est HSReplay."
         )
     return root
+
+
+def _validate_xml_declarations(declaration_scan: bytes) -> None:
+    """Refuser les constructions DTD capables de déclarer des entités.
+
+    ``declaration_scan`` est en minuscules et sans octets NUL afin que le même
+    contrôle couvre les documents ASCII, UTF-8 et UTF-16. ElementTree ne résout pas
+    les DTD externes : un DOCTYPE externe simple est donc laissé intact au parseur.
+    """
+
+    if _ENTITY_MARKER in declaration_scan:
+        raise ReplayInputError("Le replay contient une déclaration d'entité interdite.")
+
+    search_from = 0
+    while (start := declaration_scan.find(_DOCTYPE_MARKER, search_from)) >= 0:
+        end = declaration_scan.find(b">", start + len(_DOCTYPE_MARKER))
+        if end < 0:
+            raise ReplayInputError("La déclaration DOCTYPE du replay est incomplète.")
+        doctype = declaration_scan[start : end + 1]
+        if b"[" in doctype or b"entity" in doctype:
+            raise ReplayInputError(
+                "Le replay contient un sous-ensemble DTD ou une entité interdite."
+            )
+        search_from = end + 1
 
 
 def validate_size_limit(max_size_bytes: int) -> None:

@@ -56,6 +56,39 @@ def test_validate_replay_xml_accepts_official_hsreplay_root() -> None:
     assert root.tag == "HSReplay"
 
 
+def test_validate_replay_xml_accepts_official_external_doctype() -> None:
+    payload = (
+        b'<?xml version="1.0" encoding="utf-8"?>\n'
+        b'<!DOCTYPE hsreplay SYSTEM "https://hearthsim.info/hsreplay/dtd/hsreplay-1.8.dtd">\n'
+        b'<HSReplay build="1"><Game id="42" /></HSReplay>'
+    )
+
+    root = validate_replay_xml(payload)
+
+    assert root.tag == "HSReplay"
+
+
+def test_validate_replay_xml_rejects_doctype_with_internal_subset() -> None:
+    payload = b"<!DOCTYPE hsreplay [<!ELEMENT HSReplay ANY>]><HSReplay />"
+
+    with pytest.raises(ReplayInputError, match="DTD"):
+        validate_replay_xml(payload)
+
+
+def test_validate_replay_xml_rejects_entity_text_inside_doctype() -> None:
+    payload = b'<!DOCTYPE hsreplay SYSTEM "https://example.test/entity.dtd"><HSReplay />'
+
+    with pytest.raises(ReplayInputError, match="entité"):
+        validate_replay_xml(payload)
+
+
+def test_validate_replay_xml_rejects_entity_declaration_outside_doctype() -> None:
+    payload = b'<!ENTITY x "AAAA"><HSReplay />'
+
+    with pytest.raises(ReplayInputError, match="entité"):
+        validate_replay_xml(payload)
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -64,9 +97,7 @@ def test_validate_replay_xml_accepts_official_hsreplay_root() -> None:
         b"<html></html>",
         b'<Game id="42" />',
         b'<HSReplay xmlns="urn:hsreplay"><Game /></HSReplay>',
-        b'<!DOCTYPE HSReplay SYSTEM "file:///etc/passwd"><HSReplay />',
         b'<!DOCTYPE HSReplay [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><HSReplay>&xxe;</HSReplay>',
-        "<!DOCTYPE HSReplay><HSReplay />".encode("utf-16"),
     ],
 )
 def test_validate_replay_xml_rejects_unsafe_or_invalid_documents(payload: bytes) -> None:

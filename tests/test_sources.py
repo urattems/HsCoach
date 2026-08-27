@@ -125,7 +125,7 @@ def test_raw_xml_source_loads_valid_replay_without_exposing_content() -> None:
     ("content", "message"),
     [
         ("pas du XML", "XML valide"),
-        ("<!DOCTYPE HSReplay><HSReplay />", "DTD"),
+        ('<!DOCTYPE HSReplay [<!ENTITY x "AAAA">]><HSReplay />', "DTD|entité"),
         ("<html />", "racine attendue"),
     ],
 )

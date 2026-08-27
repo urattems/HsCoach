@@ -258,8 +258,10 @@ Considérer tout fichier et toute réponse HTTP comme non fiables.
 
 - Limite par défaut : 50 Mio ; timeout HTTP : 20 s ; HTTP/HTTPS uniquement ;
   téléchargement en streaming et temporaires nettoyés.
-- Vérifier la racine HSReplay et refuser DTD, entités externes et XML manifestement
-  invalide avant le parseur officiel.
+- Vérifier la racine HSReplay et refuser tout sous-ensemble DTD interne, toute
+  déclaration d'entité et tout XML manifestement invalide avant le parseur officiel.
+  Un DOCTYPE externe simple peut être conservé pour les exports HSReplay officiels,
+  sans jamais télécharger ni résoudre le DTD distant.
 - Ne permettre ni résolution externe, ni lecture arbitraire, ni path traversal.
 - Ne jamais logger ou exporter une URL signée complète. Même en DEBUG, ne conserver
   que l'hôte sans query string.
