@@ -85,15 +85,34 @@ def _validate_xml_declarations(declaration_scan: bytes) -> None:
 
     search_from = 0
     while (start := declaration_scan.find(_DOCTYPE_MARKER, search_from)) >= 0:
-        end = declaration_scan.find(b">", start + len(_DOCTYPE_MARKER))
-        if end < 0:
-            raise ReplayInputError("La déclaration DOCTYPE du replay est incomplète.")
+        end = _find_doctype_end(declaration_scan, start + len(_DOCTYPE_MARKER))
         doctype = declaration_scan[start : end + 1]
-        if b"[" in doctype or b"entity" in doctype:
+        if b"entity" in doctype:
             raise ReplayInputError(
                 "Le replay contient un sous-ensemble DTD ou une entité interdite."
             )
         search_from = end + 1
+
+
+def _find_doctype_end(declaration_scan: bytes, start: int) -> int:
+    """Trouver le ``>`` fermant hors guillemets et refuser ``[`` auparavant."""
+
+    quote: int | None = None
+    for index in range(start, len(declaration_scan)):
+        character = declaration_scan[index]
+        if quote is not None:
+            if character == quote:
+                quote = None
+            continue
+        if character in {ord('"'), ord("'")}:
+            quote = character
+        elif character == ord("["):
+            raise ReplayInputError(
+                "Le replay contient un sous-ensemble DTD ou une entité interdite."
+            )
+        elif character == ord(">"):
+            return index
+    raise ReplayInputError("La déclaration DOCTYPE du replay est incomplète.")
 
 
 def validate_size_limit(max_size_bytes: int) -> None:

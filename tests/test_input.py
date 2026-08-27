@@ -89,6 +89,71 @@ def test_validate_replay_xml_rejects_entity_declaration_outside_doctype() -> Non
         validate_replay_xml(payload)
 
 
+def test_validate_replay_xml_rejects_internal_subset_after_quoted_angle_bracket() -> None:
+    payload = (
+        b'<!DOCTYPE hsreplay SYSTEM "https://example.test/a>b.dtd" '
+        b"[<!ELEMENT HSReplay ANY>]><HSReplay />"
+    )
+
+    with pytest.raises(ReplayInputError, match="DTD"):
+        validate_replay_xml(payload)
+
+
+def test_validate_replay_xml_accepts_utf8_bom() -> None:
+    payload = b"\xef\xbb\xbf" + VALID_REPLAY
+
+    root = validate_replay_xml(payload)
+
+    assert root.tag == "HSReplay"
+
+
+def test_load_local_replay_accepts_utf16_document(tmp_path) -> None:
+    replay_path = tmp_path / "partie-utf16.xml"
+    payload = '<HSReplay build="1"><Game id="42" /></HSReplay>'.encode("utf-16")
+    replay_path.write_bytes(payload)
+
+    loaded = load_local_replay(replay_path)
+
+    assert loaded.data == payload
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        b"<?xml version='1.0' encoding='utf-8'?>",
+        b"<?xml version='1.0' encoding='UTF-8'?>",
+    ],
+)
+def test_validate_replay_xml_accepts_official_declaration_variations(
+    declaration: bytes,
+) -> None:
+    payload = declaration + b"\n" + VALID_REPLAY
+
+    root = validate_replay_xml(payload)
+
+    assert root.tag == "HSReplay"
+
+
+def test_validate_replay_xml_accepts_comment_before_root() -> None:
+    payload = b"<!-- export HSReplay -->\n" + VALID_REPLAY
+
+    root = validate_replay_xml(payload)
+
+    assert root.tag == "HSReplay"
+
+
+def test_validate_replay_xml_enforces_configured_size_boundary() -> None:
+    max_size_bytes = 1024 * 1024
+    prefix = b"<HSReplay><!--"
+    suffix = b"--></HSReplay>"
+    payload = prefix + (b"x" * (max_size_bytes - len(prefix) - len(suffix))) + suffix
+
+    assert len(payload) == max_size_bytes
+    assert validate_replay_xml(payload, max_size_bytes=max_size_bytes).tag == "HSReplay"
+    with pytest.raises(ReplayInputError, match="taille maximale"):
+        validate_replay_xml(payload, max_size_bytes=max_size_bytes - 1)
+
+
 @pytest.mark.parametrize(
     "payload",
     [
