@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -103,8 +104,8 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("Hearthstone Replay Analyzer")
-        self.setMinimumSize(780, 680)
-        self.resize(900, 780)
+        self.setMinimumSize(700, 560)
+        self.resize(900, 720)
         self._settings = settings_store or SettingsStore()
         self._preferences = self._settings.load()
         self._service_factory = service_factory
@@ -126,7 +127,11 @@ class MainWindow(QMainWindow):
         outer = QVBoxLayout(central)
         outer.setContentsMargins(24, 20, 24, 20)
         outer.setSpacing(14)
-        self.setCentralWidget(central)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(central)
+        self.setCentralWidget(scroll)
 
         heading = QLabel("Hearthstone Replay Analyzer")
         heading.setStyleSheet("font-size: 24px; font-weight: 650;")
@@ -290,6 +295,13 @@ class MainWindow(QMainWindow):
         content = self.raw_xml_input.toPlainText()
         if not content.strip() or self._running:
             return
+        if len(content.encode("utf-8")) > self._queue.max_size_bytes:
+            QMessageBox.warning(
+                self,
+                "XML brut trop volumineux",
+                "Le contenu XML dépasse la limite autorisée de 50 Mio.",
+            )
+            return
         try:
             source = RawXmlSource(content)
             source.load(max_size_bytes=self._queue.max_size_bytes)
@@ -302,8 +314,11 @@ class MainWindow(QMainWindow):
                 self._start_analysis()
 
     def _update_raw_xml_enabled(self) -> None:
+        content = self.raw_xml_input.toPlainText()
         self.raw_xml_analyse_button.setEnabled(
-            not self._running and bool(self.raw_xml_input.toPlainText().strip())
+            not self._running
+            and bool(content.strip())
+            and len(content.encode("utf-8")) <= self._queue.max_size_bytes
         )
 
     def _add_sources(self, sources: Iterable[str | Path | RawXmlSource]) -> bool:

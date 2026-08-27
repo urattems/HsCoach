@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from hscoach.exceptions import ExportError
 from hscoach.models import GameAnalysis
-from hscoach.output.json_export import export_json, render_json
+from hscoach.output.json_export import (
+    JSON_FILENAME,
+    export_json,
+    render_json,
+    report_directory_name,
+)
+from hscoach.output.llm_json import LLM_JSON_FILENAME, render_llm_json
 from hscoach.output.llm_json import export_llm_json as _export_llm_json
-from hscoach.output.llm_json import render_llm_json
+from hscoach.output.markdown import MARKDOWN_FILENAME, render_markdown
 from hscoach.output.markdown import export_markdown as _export_markdown
-from hscoach.output.markdown import render_markdown
 
 export_markdown = _export_markdown
 export_llm_json = _export_llm_json
@@ -53,18 +61,66 @@ def export_analysis(
     Les trois options restent actives par défaut afin de préserver le contrat CLI V2.
     """
 
-    # Valider toutes les représentations demandées avant de créer le premier fichier.
+    rendered = {}
     if export_markdown:
-        render_markdown(analysis)
+        rendered[MARKDOWN_FILENAME] = render_markdown(analysis)
     if export_full_json:
-        render_json(analysis)
+        rendered[JSON_FILENAME] = render_json(analysis)
     if export_llm_json:
-        render_llm_json(analysis)
-    return ExportedReports(
-        markdown=(_export_markdown(analysis, output_directory) if export_markdown else None),
-        json=export_json(analysis, output_directory) if export_full_json else None,
-        llm=_export_llm_json(analysis, output_directory) if export_llm_json else None,
-    )
+        rendered[LLM_JSON_FILENAME] = render_llm_json(analysis)
+
+    root = Path(output_directory).expanduser().resolve()
+    directory = (root / report_directory_name(analysis)).resolve()
+    if not directory.is_relative_to(root):
+        raise ExportError("Le dossier de sortie calculé est hors du dossier autorisé.")
+    temporary: dict[str, Path] = {}
+    backups: dict[Path, Path] = {}
+    committed: list[Path] = []
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        for name, content in rendered.items():
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="\n",
+                dir=directory,
+                prefix=f".{name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+                temporary[name] = Path(stream.name)
+        # Aucun rapport final n'existe encore lors d'une première exportation.
+        # Les rapports existants sont sauvegardés afin qu'un échec conserve l'ancien lot complet.
+        for name in temporary:
+            destination = directory / name
+            if destination.exists():
+                backup = directory / f".{name}.rollback.tmp"
+                destination.replace(backup)
+                backups[destination] = backup
+        for name, source in temporary.items():
+            destination = directory / name
+            source.replace(destination)
+            committed.append(destination)
+        return ExportedReports(
+            markdown=directory / MARKDOWN_FILENAME if export_markdown else None,
+            json=directory / JSON_FILENAME if export_full_json else None,
+            llm=directory / LLM_JSON_FILENAME if export_llm_json else None,
+        )
+    except OSError as exc:
+        for path in committed:
+            path.unlink(missing_ok=True)
+        for destination, backup in backups.items():
+            if backup.exists():
+                backup.replace(destination)
+        raise ExportError("Le lot de rapports n'a pas pu être écrit intégralement.") from exc
+    finally:
+        for path in temporary.values():
+            path.unlink(missing_ok=True)
+        for path in backups.values():
+            path.unlink(missing_ok=True)
 
 
 __all__ = [

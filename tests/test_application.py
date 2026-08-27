@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from hscoach.application import (
     AnalysisRequest,
     AnalysisService,
@@ -11,7 +13,7 @@ from hscoach.application import (
     ProgressStage,
 )
 from hscoach.config import AppConfig
-from hscoach.exceptions import ReplayInputError
+from hscoach.exceptions import ExportError, ReplayInputError
 from hscoach.input import LoadedReplay
 from hscoach.input.sources import ReplaySourceKind
 from hscoach.models import GameAnalysis, Player, PlayerSide, ReplayMetadata
@@ -206,3 +208,27 @@ def test_selective_exports_keep_historical_defaults(tmp_path: Path) -> None:
     assert historical.markdown is not None and historical.markdown.is_file()
     assert historical.llm is not None and historical.llm.is_file()
     assert historical.json is not None and historical.json.is_file()
+
+
+@pytest.mark.parametrize("failure_number", [2, 3])
+def test_report_set_rolls_back_if_a_commit_fails(
+    tmp_path: Path, monkeypatch, failure_number
+) -> None:
+    original_replace = Path.replace
+    commit_count = 0
+
+    def failing_replace(source: Path, target: Path):
+        nonlocal commit_count
+        if source.suffix == ".tmp" and "rollback" not in source.name:
+            commit_count += 1
+            if commit_count == failure_number:
+                raise OSError("échec simulé")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    with pytest.raises(ExportError, match="intégralement"):
+        export_analysis(_analysis(), tmp_path)
+
+    assert not list(tmp_path.rglob("game_*.json"))
+    assert not list(tmp_path.rglob("game_summary.md"))
+    assert not list(tmp_path.rglob("*.tmp"))
