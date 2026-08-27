@@ -20,7 +20,7 @@ from hscoach.models import Card
 
 LOGGER = logging.getLogger(__name__)
 
-CARDS_URL_TEMPLATE = "https://api.hearthstonejson.com/v1/latest/{locale}/cards.json"
+CARDS_URL_TEMPLATE = "https://api.hearthstonejson.com/v1/{build}/{locale}/cards.json"
 DEFAULT_CACHE_DIRECTORY = Path(".cache")
 DEFAULT_LOCALE = "frFR"
 DEFAULT_MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024
@@ -148,12 +148,15 @@ class HearthstoneJSON:
         cache_directory: str | Path = DEFAULT_CACHE_DIRECTORY,
         *,
         locale: str = DEFAULT_LOCALE,
+        build: str | int | None = None,
         client: httpx.Client | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         max_download_size: int = DEFAULT_MAX_DOWNLOAD_SIZE,
     ) -> None:
         if not locale or "/" in locale or "\\" in locale or locale in {".", ".."}:
             raise ValueError("La locale HearthstoneJSON n'est pas valide.")
+        if build is not None and (isinstance(build, bool) or not str(build).isdigit()):
+            raise ValueError("Le build HearthstoneJSON n'est pas valide.")
         if timeout <= 0:
             raise ValueError("Le délai HTTP doit être positif.")
         if max_download_size <= 0:
@@ -161,6 +164,9 @@ class HearthstoneJSON:
 
         self.cache_directory = Path(cache_directory)
         self.locale = locale
+        self.build = str(build) if build is not None else None
+        self.resolution = "latest" if self.build is None else "exact-build"
+        self.resolved_build = self.build
         self.client = client
         self.timeout = timeout
         self.max_download_size = max_download_size
@@ -169,7 +175,8 @@ class HearthstoneJSON:
     def cache_dir(self) -> Path:
         """Dossier propre à la locale, sous la racine de cache configurée."""
 
-        return self.cache_directory / "hearthstonejson" / self.locale
+        build_key = self.build or "latest"
+        return self.cache_directory / "hearthstonejson" / build_key / self.locale
 
     @property
     def cards_path(self) -> Path:
@@ -181,7 +188,7 @@ class HearthstoneJSON:
 
     @property
     def source_url(self) -> str:
-        return CARDS_URL_TEMPLATE.format(locale=self.locale)
+        return CARDS_URL_TEMPLATE.format(build=self.build or "latest", locale=self.locale)
 
     def load(self) -> dict[str, Card]:
         """Utiliser immédiatement le cache valide, sinon le télécharger."""
@@ -190,7 +197,22 @@ class HearthstoneJSON:
             return self._load_cache()
         except CardDataError as cache_error:
             LOGGER.info("Aucun cache HearthstoneJSON %s valide; téléchargement.", self.locale)
-            return self._download_and_cache(cache_error=cache_error)
+            try:
+                return self._download_and_cache(cache_error=cache_error)
+            except CardDataError:
+                if self.build is None:
+                    raise
+                fallback = HearthstoneJSON(
+                    self.cache_directory,
+                    locale=self.locale,
+                    client=self.client,
+                    timeout=self.timeout,
+                    max_download_size=self.max_download_size,
+                )
+                cards = fallback.load()
+                self.resolution = "fallback"
+                self.resolved_build = fallback.resolved_build
+                return cards
 
     def refresh(self) -> dict[str, Card]:
         """Actualiser atomiquement le cache, avec repli sur sa version valide."""
@@ -325,6 +347,8 @@ class HearthstoneJSON:
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             metadata: dict[str, Any] = {
+                "requested_build": self.build,
+                "resolution": self.resolution,
                 "card_count": card_count,
                 "downloaded_at": datetime.now(UTC).isoformat(),
                 "locale": self.locale,

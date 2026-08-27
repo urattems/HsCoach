@@ -8,6 +8,7 @@ import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 import httpx
 
@@ -30,6 +31,7 @@ from hscoach.input.sources import (
     safe_source_label,
 )
 from hscoach.models import Card, GameAnalysis
+from hscoach.models.game import ParseWarning
 from hscoach.output import ExportedReports, export_analysis
 from hscoach.replay.parser import analyze_replay_data
 
@@ -69,10 +71,9 @@ class AnalysisService:
         batch = BatchAnalysisResult()
         output_checked = False
         output_error: ExportError | None = None
-        cards: Mapping[str, Card] | None = None
-        english_cards: Mapping[str, Card] | None = None
-        cards_loaded = False
-        cards_error: HSCoachError | None = None
+        cards_by_build: dict[
+            str | None, tuple[Mapping[str, Card], Mapping[str, Card] | None, str, str | None]
+        ] = {}
 
         for index, raw_source in enumerate(request.sources, start=1):
             label = safe_source_label(raw_source)
@@ -126,15 +127,12 @@ class AnalysisService:
                     "Replay chargé et validé.",
                 )
 
-                if not cards_loaded:
-                    cards_loaded = True
-                    try:
-                        cards, english_cards = self._load_cards(request.allow_en_fallback)
-                    except HSCoachError as exc:
-                        cards_error = exc
-                if cards_error is not None:
-                    raise cards_error
-                assert cards is not None
+                replay_build = self._replay_build(loaded.data)
+                if replay_build not in cards_by_build:
+                    cards_by_build[replay_build] = self._load_cards(
+                        request.allow_en_fallback, build=replay_build
+                    )
+                cards, english_cards, card_status, card_build = cards_by_build[replay_build]
                 self._emit(
                     progress,
                     ProgressStage.CARDS_READY,
@@ -153,6 +151,18 @@ class AnalysisService:
                     source_label=loaded.source_label,
                     max_size_bytes=self.config.max_download_size_bytes,
                 )
+                analysis.metadata.card_data_status = card_status
+                analysis.metadata.card_data_build = card_build
+                if card_status == "fallback":
+                    analysis.warnings.append(
+                        ParseWarning(
+                            code="hearthstonejson_build_fallback",
+                            message=(
+                                f"Les données exactes du build {replay_build} sont indisponibles ; "
+                                "les définitions HearthstoneJSON courantes ont été utilisées."
+                            ),
+                        )
+                    )
                 if (
                     isinstance(source, RawXmlSource)
                     and analysis.metadata.game_id == "partie-inconnue"
@@ -255,8 +265,11 @@ class AnalysisService:
             timeout_seconds=self.config.http_timeout_seconds,
             client=self.http_client,
         )
-        cards, english_cards = self._load_cards(allow_en_fallback)
-        return self._analyzer(
+        replay_build = self._replay_build(loaded.data)
+        cards, english_cards, status, card_build = self._load_cards(
+            allow_en_fallback, build=replay_build
+        )
+        analysis = self._analyzer(
             loaded.data,
             cards,
             english_cards_by_id=english_cards,
@@ -264,6 +277,9 @@ class AnalysisService:
             source_label=loaded.source_label,
             max_size_bytes=self.config.max_download_size_bytes,
         )
+        analysis.metadata.card_data_status = status
+        analysis.metadata.card_data_build = card_build
+        return analysis
 
     def refresh_cards(self, *, locale: str | None = None) -> Mapping[str, Card]:
         """Actualiser les cartes via la même configuration applicative."""
@@ -281,23 +297,36 @@ class AnalysisService:
         return provider.refresh()
 
     def _load_cards(
-        self, allow_en_fallback: bool
-    ) -> tuple[Mapping[str, Card], Mapping[str, Card] | None]:
-        cards = self._card_provider_factory(
+        self, allow_en_fallback: bool, *, build: str | None = None
+    ) -> tuple[Mapping[str, Card], Mapping[str, Card] | None, str, str | None]:
+        provider = self._card_provider_factory(
             self.config.cache_directory,
             locale=self.config.locale,
+            build=build,
             timeout=self.config.http_timeout_seconds,
             client=self.http_client,
-        ).load()
+        )
+        cards = provider.load()
         english_cards = None
         if allow_en_fallback:
             english_cards = self._card_provider_factory(
                 self.config.cache_directory,
                 locale="enUS",
+                build=build,
                 timeout=self.config.http_timeout_seconds,
                 client=self.http_client,
             ).load()
-        return cards, english_cards
+        status = getattr(provider, "resolution", "exact-build" if build else "latest")
+        resolved_build = getattr(provider, "resolved_build", build)
+        return cards, english_cards, status, resolved_build
+
+    @staticmethod
+    def _replay_build(data: bytes) -> str | None:
+        try:
+            build = ElementTree.fromstring(data).get("build")
+        except (ElementTree.ParseError, ValueError, TypeError):
+            return None
+        return build if build and build.isdigit() else None
 
     @staticmethod
     def _emit(

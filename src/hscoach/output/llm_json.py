@@ -49,6 +49,10 @@ class _CompactDocument:
             "result": analysis.metadata.result,
             "full_turns": analysis.metadata.turn_count,
             "duration_seconds": analysis.metadata.duration_seconds,
+            "card_data": {
+                "status": analysis.metadata.card_data_status,
+                "build": analysis.metadata.card_data_build,
+            },
             "player": self._player(analysis.player),
             "opponent": self._player(analysis.opponent),
         }

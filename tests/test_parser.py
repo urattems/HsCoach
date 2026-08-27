@@ -1,10 +1,16 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from hscoach.exceptions import ReplayParseError
-from hscoach.models import PlayerSide
-from hscoach.replay.parser import analyze_replay_data, extract_replay_facts, parse_replay_data
+from hscoach.models import ActionType, GameAction, PlayerSide
+from hscoach.replay.parser import (
+    _normalize_action_sequences,
+    analyze_replay_data,
+    extract_replay_facts,
+    parse_replay_data,
+)
 
 SAMPLE = Path(__file__).parents[1] / "samples" / "sample_replay.hsreplay"
 requires_user_sample = pytest.mark.skipif(
@@ -44,6 +50,19 @@ def test_private_player_attributes_never_enter_structural_models() -> None:
 def test_hsreplay_without_game_is_rejected() -> None:
     with pytest.raises(ReplayParseError, match="aucune partie"):
         parse_replay_data(b'<HSReplay build="1" version="1.7"/>')
+
+
+def test_missing_timestamp_keeps_protocol_sequence_between_actions() -> None:
+    actions = [
+        GameAction(10, ActionType.PLAY_CARD, PlayerSide.PLAYER, "joue", timestamp="10:00"),
+        GameAction(15, ActionType.CHOICE, PlayerSide.PLAYER, "choix", timestamp=None),
+        GameAction(20, ActionType.CREATE_CARD, PlayerSide.PLAYER, "création", timestamp="10:01"),
+    ]
+    turn = SimpleNamespace(actions=actions, entity_deltas=[])
+
+    _normalize_action_sequences([], [turn])
+
+    assert [action.description for action in turn.actions] == ["joue", "choix", "création"]
 
 
 @requires_user_sample

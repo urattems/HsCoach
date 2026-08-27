@@ -6,7 +6,6 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from io import BytesIO
 from typing import Any
 from xml.etree import ElementTree
 
@@ -77,7 +76,9 @@ def parse_replay_data(
 
     root = validate_replay_xml(data, max_size_bytes=max_size_bytes)
     try:
-        document = HSReplayDocument.from_xml_file(BytesIO(data))
+        # Le parseur HearthSim reçoit l'arbre déjà validé : les octets non fiables
+        # ne sont pas reparsés par lxml avec une configuration indépendante.
+        document = HSReplayDocument.from_xml(ElementTree.ElementTree(root))
         packet_trees = document.to_packet_tree()
     except Exception as exc:
         raise ReplayParseError(
@@ -305,7 +306,7 @@ def _attach_choice_actions(turn: object, choices: list[object]) -> None:
             description = f"{choice.choice_type} proposé ; réponse absente du replay."
         turn.actions.append(
             GameAction(
-                sequence=0,
+                sequence=choice.sequence,
                 action_type=action_type,
                 player=choice.player,
                 description=description,
@@ -332,13 +333,18 @@ def _normalize_action_sequences(start_events: list[GameAction], turns: list[obje
     for turn in turns:
         original_order = {id(action): index for index, action in enumerate(turn.actions)}
         original_sequences = {id(action): action.sequence for action in turn.actions}
-        turn.actions.sort(
-            key=lambda action: (
-                action.timestamp is not None,
-                action.timestamp or "",
-                original_order[id(action)],
+        # La séquence protocolaire reste l'autorité lorsque des timestamps manquent.
+        # Un timestamp ne peut raffiner l'ordre que si toutes les actions en ont un.
+        if turn.actions and all(action.timestamp is not None for action in turn.actions):
+            turn.actions.sort(key=lambda action: (action.timestamp, original_order[id(action)]))
+        else:
+            turn.actions.sort(
+                key=lambda action: (
+                    action.sequence <= 0,
+                    action.sequence if action.sequence > 0 else original_order[id(action)],
+                    original_order[id(action)],
+                )
             )
-        )
         sequence_mapping: dict[int, int] = {}
         for action in turn.actions:
             sequence += 1

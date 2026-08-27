@@ -33,6 +33,8 @@ class ReplayMetadata:
     result: str = "Inconnu"
     turn_count: int = 0
     duration_seconds: float | None = None
+    card_data_status: str = "unavailable"
+    card_data_build: str | None = None
 
 
 @dataclass(slots=True)

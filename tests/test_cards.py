@@ -141,6 +141,46 @@ def test_load_downloads_full_cards_file_and_creates_metadata(tmp_path) -> None:
     assert metadata["sha256"] == hashlib.sha256(cards_json()).hexdigest()
 
 
+def test_exact_build_uses_isolated_url_and_cache(tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.hearthstonejson.com/v1/248348/frFR/cards.json"
+        return httpx.Response(200, content=cards_json())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        service = HearthstoneJSON(tmp_path, build="248348", client=client)
+        cards = service.load()
+
+    assert cards["FR_001"].name == "Garde français"
+    assert service.cache_dir == tmp_path / "hearthstonejson" / "248348" / "frFR"
+    assert service.resolution == "exact-build"
+
+
+def test_missing_exact_build_falls_back_explicitly_to_latest(tmp_path) -> None:
+    requested = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if "/248348/" in str(request.url):
+            return httpx.Response(404)
+        return httpx.Response(200, content=cards_json())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        service = HearthstoneJSON(tmp_path, build="248348", client=client)
+        service.load()
+
+    assert requested == [
+        "https://api.hearthstonejson.com/v1/248348/frFR/cards.json",
+        "https://api.hearthstonejson.com/v1/latest/frFR/cards.json",
+    ]
+    assert service.resolution == "fallback"
+
+
+@pytest.mark.parametrize("build", ["../latest", "1/2", "abc", True])
+def test_invalid_build_is_rejected_before_path_construction(tmp_path, build) -> None:
+    with pytest.raises(ValueError, match="build HearthstoneJSON"):
+        HearthstoneJSON(tmp_path, build=build)
+
+
 def test_load_uses_cache_without_network(tmp_path) -> None:
     service = HearthstoneJSON(tmp_path)
     write_cache(service, cards_json())
