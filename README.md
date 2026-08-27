@@ -251,7 +251,7 @@ conservé comme historique dans [docs/OVERWOLF.md](docs/OVERWOLF.md).
 
 ## Construire l’application Windows
 
-Le build reproductible utilise CPython 3.11 x64, les versions exactes de
+L'environnement de build verrouillé et reproductible utilise CPython 3.11 x64, les versions exactes de
 `requirements/release.txt` et PyInstaller en mode **one-folder** sur Windows :
 
 ```powershell
