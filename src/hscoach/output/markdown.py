@@ -35,11 +35,11 @@ def export_markdown(
 ) -> Path:
     """Écrire atomiquement ``output/<game-id>/game_summary.md``."""
 
-    from hscoach.output.json_export import safe_game_id
+    from hscoach.output.json_export import report_directory_name
 
     report = render_markdown(analysis)
     root = Path(output_directory).expanduser().resolve()
-    game_directory = (root / safe_game_id(analysis.metadata.game_id)).resolve()
+    game_directory = (root / report_directory_name(analysis)).resolve()
     if not game_directory.is_relative_to(root):
         raise ExportError("Le dossier de sortie calculé est situé hors du dossier autorisé.")
 

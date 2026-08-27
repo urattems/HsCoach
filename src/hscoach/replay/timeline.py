@@ -97,10 +97,15 @@ class _BlockContext:
 
 
 _IMPORTANT_ACTIONS = {
-    ActionType.CARD_CREATED,
-    ActionType.DEATH,
+    ActionType.ADD_TO_HAND,
+    ActionType.DISCOVER,
+    ActionType.CHOICE,
+    ActionType.TRANSFORM,
     ActionType.PLAY_SECRET,
     ActionType.REVEAL_SECRET,
+    ActionType.FATIGUE,
+    ActionType.BECOMES_DORMANT,
+    ActionType.AWAKENS,
     ActionType.VICTORY,
     ActionType.DEFEAT,
     ActionType.CONCEDE,
@@ -136,6 +141,7 @@ class _TimelineBuilder:
         self.current_phase = TurnPhase.UNKNOWN
         self.block_stack: list[_BlockContext] = []
         self.pending_creation_entity_id: int | None = None
+        self.nested_power_events: dict[int, list[dict[str, object]]] = {}
 
     def build(self) -> TimelineResult:
         packets = list(self.context.packet_tree)
@@ -385,6 +391,14 @@ class _TimelineBuilder:
         else:
             action_type = ActionType.PLAY_CARD
             description = f"{_side_label(side)} joue {source.name}."
+        metadata: dict[str, object] = {
+            "block_type": BlockType.PLAY.name,
+            "entity_id": entity_id,
+            "target_entity_id": target_id,
+        }
+        protocol_events = self.nested_power_events.pop(sequence, [])
+        if protocol_events:
+            metadata["protocol_events"] = protocol_events
         self._emit(
             action_type,
             side,
@@ -392,11 +406,7 @@ class _TimelineBuilder:
             timestamp=timestamp,
             source_card=source,
             target_card=target,
-            metadata={
-                "block_type": BlockType.PLAY.name,
-                "entity_id": entity_id,
-                "target_entity_id": target_id,
-            },
+            metadata=metadata,
             destination=destination,
             sequence=sequence,
         )
@@ -410,6 +420,29 @@ class _TimelineBuilder:
         destination: TurnState | None,
         sequence: int | None,
     ) -> None:
+        parent_play = next(
+            (
+                context
+                for context in reversed(self.block_stack)
+                if context.block_type is BlockType.PLAY
+            ),
+            None,
+        )
+        if (
+            state
+            and state.card_type is CardType.HERO_POWER
+            and parent_play is not None
+            and parent_play.entity_id == entity_id
+            and parent_play.sequence is not None
+        ):
+            self.nested_power_events.setdefault(parent_play.sequence, []).append(
+                {
+                    "block_type": BlockType.POWER.name,
+                    "entity_id": entity_id,
+                    "sequence": sequence,
+                }
+            )
+            return
         source = self._reference(entity_id)
         if state and state.card_type is CardType.HERO_POWER:
             action_type = ActionType.HERO_POWER
@@ -447,8 +480,13 @@ class _TimelineBuilder:
             state.raw_card_id = card_id
             state.observable_card_id = card_id
         self._apply_tags(state, packet.tags)
-        if (introduced and (state.raw_card_id is not None or state.creator is not None)) or (
-            isinstance(packet, ShowEntity) and self.pending_creation_entity_id == entity_id
+        causally_introduced = introduced and bool(self.block_stack)
+        if (
+            causally_introduced and (state.raw_card_id is not None or state.creator is not None)
+        ) or (
+            isinstance(packet, ShowEntity)
+            and self.pending_creation_entity_id == entity_id
+            and bool(self.block_stack)
         ):
             self._emit_creation_if_needed(state, observed_introduction=True)
             self.pending_creation_entity_id = None
@@ -1183,7 +1221,7 @@ class _TimelineBuilder:
             self.start_events.append(action)
         else:
             target_turn.actions.append(action)
-        if action_type in _IMPORTANT_ACTIONS and not action.technical:
+        if _is_important_action(action):
             self.important_events.append(action)
         return action
 
@@ -1212,6 +1250,18 @@ def extract_timeline(
         player_entity_id,
         opponent_entity_id,
     ).build()
+
+
+def _is_important_action(action: GameAction) -> bool:
+    if action.technical or action.action_type not in _IMPORTANT_ACTIONS:
+        return False
+    if action.action_type is ActionType.ADD_TO_HAND:
+        return (
+            action.player is PlayerSide.PLAYER
+            and action.target_card is not None
+            and action.target_card.provenance is not None
+        )
+    return True
 
 
 def gameplay_start_event_groups(

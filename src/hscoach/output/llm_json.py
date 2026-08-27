@@ -14,7 +14,7 @@ from typing import Any
 
 from hscoach.exceptions import ExportError
 from hscoach.models import CardRef, GameAnalysis, InformationSource
-from hscoach.output.json_export import safe_game_id
+from hscoach.output.json_export import report_directory_name
 from hscoach.privacy import assert_shareable_text
 from hscoach.replay.timeline import gameplay_start_event_groups
 
@@ -493,7 +493,7 @@ def export_llm_json(
 
     rendered = render_llm_json(analysis)
     root = Path(output_directory).expanduser().resolve()
-    game_directory = (root / safe_game_id(analysis.metadata.game_id)).resolve()
+    game_directory = (root / report_directory_name(analysis)).resolve()
     if not game_directory.is_relative_to(root):
         raise ExportError("Le dossier de sortie calculé est situé hors du dossier autorisé.")
 

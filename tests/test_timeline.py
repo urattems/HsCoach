@@ -9,8 +9,15 @@ from hscoach.replay.parser import extract_replay_facts, parse_replay_data
 from hscoach.replay.timeline import extract_timeline, gameplay_start_event_groups
 
 SAMPLE = Path(__file__).parents[1] / "samples" / "sample_replay.hsreplay"
+MAGE_SAMPLE = next(
+    (path for path in (Path(__file__).parents[1] / "samples").glob("*_vs_mage")),
+    Path("replay-utilisateur-absent"),
+)
 requires_user_sample = pytest.mark.skipif(
     not SAMPLE.is_file(), reason="Replay utilisateur local non disponible."
+)
+requires_mage_sample = pytest.mark.skipif(
+    not MAGE_SAMPLE.is_file(), reason="Replay Chaman contre Mage local non disponible."
 )
 
 
@@ -135,6 +142,59 @@ def test_real_replay_contains_ordered_half_turns_and_main_actions() -> None:
         ActionType.BECOMES_DORMANT,
         ActionType.AWAKENS,
     ]
+
+
+@requires_mage_sample
+def test_real_mage_replay_keeps_ultraxion_and_hero_power_semantics() -> None:
+    facts = extract_replay_facts(parse_replay_data(MAGE_SAMPLE.read_bytes()))
+    result = extract_timeline(
+        facts.context,
+        FakeResolver(),
+        player_entity_id=facts.player.entity_id,
+        opponent_entity_id=facts.opponent.entity_id,
+    )
+    actions = result.start_of_game_events + [
+        action for turn in result.turns for action in turn.actions
+    ]
+
+    assert not any(
+        action.action_type is ActionType.CARD_CREATED
+        and action.target_card is not None
+        and action.target_card.entity_id in {69, 70, 71}
+        for action in result.start_of_game_events
+    )
+    ultraxion_play = next(
+        action
+        for action in actions
+        if action.action_type is ActionType.PLAY_CARD
+        and action.source_card is not None
+        and action.source_card.card_id == "CATA_565"
+    )
+    real_soldiers = [
+        action
+        for action in actions
+        if action.action_type is ActionType.CARD_CREATED
+        and action.target_card is not None
+        and action.target_card.card_id == "CATA_565t"
+        and action.source_card is not None
+        and action.source_card.entity_id == ultraxion_play.source_card.entity_id
+    ]
+    assert len(real_soldiers) == 2
+
+    turn_14 = next(
+        turn
+        for turn in result.turns
+        if turn.round_number == 14 and turn.active_player is PlayerSide.PLAYER
+    )
+    hero_powers = [
+        action
+        for action in turn_14.actions
+        if action.action_type is ActionType.HERO_POWER
+        and action.source_card is not None
+        and action.source_card.card_id == "CATA_190p"
+    ]
+    assert len(hero_powers) == 1
+    assert hero_powers[0].metadata["protocol_events"][0]["block_type"] == "POWER"
 
 
 def test_opponent_draw_is_not_retroactively_revealed_when_card_is_played() -> None:
@@ -290,6 +350,25 @@ def test_creator_provenance_does_not_fabricate_late_creation_events() -> None:
     )
 
 
+@pytest.mark.parametrize("activation_count", [1, 2])
+def test_nested_hero_power_blocks_emit_one_action_per_root_activation(
+    activation_count: int,
+) -> None:
+    result = extract_timeline(
+        parse_replay_data(_hero_power_fixture(activation_count)),
+        FakeResolver(),
+        player_entity_id=2,
+        opponent_entity_id=3,
+    )
+    actions = [
+        action for action in result.turns[0].actions if action.action_type is ActionType.HERO_POWER
+    ]
+
+    assert len(actions) == activation_count
+    assert all(action.metadata["block_type"] == "PLAY" for action in actions)
+    assert all(action.metadata["protocol_events"][0]["block_type"] == "POWER" for action in actions)
+
+
 def test_dormant_projection_is_technical_but_cached_buffs_remain_gameplay() -> None:
     result = extract_timeline(
         parse_replay_data(_dormant_fixture()),
@@ -403,22 +482,56 @@ def _creation_provenance_fixture() -> bytes:
 <ShowEntity entity="41" cardID="SHOW_REVEALED">
 <Tag tag="{creator}" value="20"/><Tag tag="{zone}" value="{int(Zone.HAND)}"/>
 </ShowEntity>
+<Block entity="20" type="3">
 <FullEntity id="42"/>
 <ShowEntity entity="42" cardID="RUNTIME_PAIRED">
 <Tag tag="{creator}" value="20"/><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
 <Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.SPELL)}"/>
 </ShowEntity>
+</Block>
+<Block entity="20" type="3">
 <FullEntity id="43" cardID="RUNTIME_DIRECT">
 <Tag tag="{creator}" value="20"/><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
 <Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.SPELL)}"/>
 </FullEntity>
+</Block>
+<Block entity="20" type="3">
 <FullEntity id="44" cardID="TECH_001e">
 <Tag tag="{creator}" value="20"/><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
 <Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.ENCHANTMENT)}"/>
 </FullEntity>
+</Block>
 </Game></HSReplay>
 """
     return xml.encode()
+
+
+def _hero_power_fixture(activation_count: int) -> bytes:
+    zone = int(GameTag.ZONE)
+    controller = int(GameTag.CONTROLLER)
+    card_type = int(GameTag.CARDTYPE)
+    turn = int(GameTag.TURN)
+    step = int(GameTag.STEP)
+    current_player = int(GameTag.CURRENT_PLAYER)
+    activations = "\n".join(
+        '<Block entity="10" type="7"><Block entity="10" type="3"/></Block>'
+        for _ in range(activation_count)
+    )
+    return f"""\
+<HSReplay build="1" version="1.7">
+<Game id="hero-power"><GameEntity id="1"/>
+<Player id="2" playerID="1" accountHi="0" accountLo="1"/>
+<Player id="3" playerID="2" accountHi="0" accountLo="2"/>
+<FullEntity id="10" cardID="HERO_POWER"><Tag tag="{zone}" value="{int(Zone.PLAY)}"/>
+<Tag tag="{controller}" value="1"/>
+<Tag tag="{card_type}" value="{int(CardType.HERO_POWER)}"/></FullEntity>
+<TagChange entity="2" tag="{current_player}" value="1"/>
+<TagChange entity="1" tag="{turn}" value="1"/>
+<TagChange entity="1" tag="{step}" value="6"/>
+<TagChange entity="1" tag="{step}" value="10"/>
+{activations}
+</Game></HSReplay>
+""".encode()
 
 
 def _dormant_fixture() -> bytes:
@@ -486,9 +599,11 @@ def _structural_events_fixture() -> bytes:
 <TagChange entity="1" tag="{step}" value="6"/>
 <TagChange entity="1" tag="{step}" value="10"/>
 <Block entity="20" type="1" target="10"/>
+<Block entity="20" type="3">
 <FullEntity id="30" cardID="GENERATED"><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
 <Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.SPELL)}"/>
 <Tag tag="{creator}" value="20"/></FullEntity>
+</Block>
 <Block entity="0" type="6"><TagChange entity="10" tag="{zone}"
  value="{int(Zone.GRAVEYARD)}"/></Block>
 <ChangeEntity entity="20" cardID="TRANSFORMED"/>

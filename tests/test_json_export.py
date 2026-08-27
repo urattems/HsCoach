@@ -14,7 +14,13 @@ from hscoach.models import (
     PlayerSide,
     ReplayMetadata,
 )
-from hscoach.output.json_export import analysis_to_dict, export_json, render_json, safe_game_id
+from hscoach.output.json_export import (
+    analysis_to_dict,
+    export_json,
+    render_json,
+    report_directory_name,
+    safe_game_id,
+)
 
 
 def _analysis(*, game_id: str = "partie-42") -> GameAnalysis:
@@ -86,7 +92,7 @@ def test_render_json_is_deterministic_utf8_and_strict() -> None:
 def test_export_json_writes_expected_file_atomically(tmp_path: Path) -> None:
     destination = export_json(_analysis(), tmp_path)
 
-    assert destination == tmp_path / "partie-42" / "game_analysis.json"
+    assert destination == tmp_path / report_directory_name(_analysis()) / "game_analysis.json"
     assert json.loads(destination.read_text(encoding="utf-8"))["game"]["result"] == "Victoire"
     assert not list(destination.parent.glob("*.tmp"))
 
@@ -100,8 +106,8 @@ def test_hostile_game_id_cannot_escape_output_directory(tmp_path: Path) -> None:
     destination = export_json(_analysis(game_id=hostile_id), tmp_path)
 
     assert destination.parent.parent == tmp_path.resolve()
-    assert destination.parent.name == safe_game_id(hostile_id)
-    assert destination.parent.name.startswith("partie-")
+    assert destination.parent.name == report_directory_name(_analysis(game_id=hostile_id))
+    assert "-partie-" in destination.parent.name
     assert not (tmp_path.parent / "rapport-secret").exists()
 
 
@@ -111,6 +117,14 @@ def test_windows_reserved_game_id_uses_safe_fallback(reserved_id: str) -> None:
 
     assert folder_name.startswith("partie-")
     assert folder_name.casefold() != reserved_id.casefold()
+
+
+def test_report_directory_name_contains_date_matchup_and_safe_id() -> None:
+    analysis = _analysis(game_id="match-42")
+    analysis.metadata.started_at = "2026-08-22T12:34:56+00:00"
+    analysis.opponent.card_class = "Chasseur de démons"
+
+    assert report_directory_name(analysis) == ("2026-08-22-Chaman-vs-Chasseur-de-demons-match-42")
 
 
 def test_export_refuses_sensitive_content_before_writing(tmp_path: Path) -> None:

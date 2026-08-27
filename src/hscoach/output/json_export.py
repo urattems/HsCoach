@@ -7,8 +7,11 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import fields, is_dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -25,7 +28,13 @@ _WINDOWS_RESERVED_STEMS = frozenset(
     | {f"LPT{index}" for index in range(1, 10)}
 )
 
-__all__ = ["analysis_to_dict", "export_json", "render_json", "safe_game_id"]
+__all__ = [
+    "analysis_to_dict",
+    "export_json",
+    "render_json",
+    "report_directory_name",
+    "safe_game_id",
+]
 
 
 def analysis_to_dict(analysis: GameAnalysis) -> dict[str, Any]:
@@ -83,7 +92,7 @@ def export_json(
 
     rendered = render_json(analysis)
     root = Path(output_directory).expanduser().resolve()
-    game_directory = root / safe_game_id(analysis.metadata.game_id)
+    game_directory = root / report_directory_name(analysis)
     resolved_game_directory = game_directory.resolve()
 
     if not resolved_game_directory.is_relative_to(root):
@@ -138,6 +147,26 @@ def safe_game_id(game_id: str) -> str:
 
     digest = hashlib.sha256(game_id.encode("utf-8")).hexdigest()[:16]
     return f"partie-{digest}"
+
+
+def report_directory_name(analysis: GameAnalysis) -> str:
+    """Nommer un rapport par date et matchup, sans identité de compte."""
+
+    date = "date-inconnue"
+    if analysis.metadata.started_at:
+        with suppress(ValueError):
+            date = (
+                datetime.fromisoformat(analysis.metadata.started_at.replace("Z", "+00:00"))
+                .date()
+                .isoformat()
+            )
+    matchup = _ascii_slug(f"{analysis.player.card_class}-vs-{analysis.opponent.card_class}")
+    return f"{date}-{matchup}-{safe_game_id(analysis.metadata.game_id)}"
+
+
+def _ascii_slug(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Za-z0-9]+", "-", normalized).strip("-") or "match-inconnu"
 
 
 def _to_json_value(value: Any) -> Any:
