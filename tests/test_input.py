@@ -195,7 +195,7 @@ def test_load_source_refuses_hsreplay_page_without_http_request() -> None:
 
     with (
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
-        pytest.raises(ReplayInputError, match="pas encore pris en charge"),
+        pytest.raises(ReplayInputError, match="pas pris en charge directement"),
     ):
         load_source("https://hsreplay.net/replay/ABC123", client=client)
 

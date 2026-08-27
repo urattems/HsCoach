@@ -49,7 +49,8 @@ sample privé absent.
 | Mauvaise extension | Déposer un `.zip` ou `.exe`. | Refus français immédiat ; rien n’est exécuté ou extrait. |
 | Faux XML | Déposer un texte quelconque renommé `.xml`. | « Le replay ne contient pas un document XML valide. » |
 | Mauvaise racine | Fournir un XML dont la racine n’est pas `HSReplay`. | Replay refusé, aucun rapport partiel. |
-| DTD/XXE | Fournir une fixture locale avec `DOCTYPE` ou `ENTITY`. | Refus avant parsing ; aucune résolution externe. |
+| DOCTYPE HSReplay externe | Fournir un XML avec le DOCTYPE officiel sans sous-ensemble interne. | Accepté sans téléchargement ni résolution du DTD. |
+| DTD/XXE | Fournir une fixture avec sous-ensemble interne ou `ENTITY`. | Refus avant parsing ; aucune résolution externe. |
 | XML direct valide | Coller une URL HTTPS de test pointant vers le XML. | Téléchargement, validation, analyse. |
 | XML signé valide | Coller localement une URL S3 signée. | Succès ; ni la liste, ni le log, ni les réglages ne contiennent la query string. |
 | URL signée expirée | Utiliser une URL de test expirée. | « Le lien XML a expiré. » ou refus HTTP français équivalent. |
@@ -58,7 +59,7 @@ sample privé absent.
 | HTML avec HTTP 200 | Pointer vers une page HTML de test. | Refus : la réponse n’est pas un replay HSReplay XML. |
 | URL non HTTP(S) | Coller `file:`, `ftp:` ou une URL avec identifiants. | Refus avant toute requête réseau. |
 | Très gros fichier | Dépasser la limite configurée de 50 Mio. | Arrêt de lecture/téléchargement et erreur de taille. |
-| Page HSReplay publique, V3 | Coller `https://hsreplay.net/replay/ID_DE_TEST`. | Aucun scraping ni téléchargement ; message indiquant d’utiliser le XML direct ou un fichier. |
+| Page HSReplay publique, V3 | Coller `https://hsreplay.net/replay/ID_DE_TEST`. | Aucun scraping ni téléchargement ; message donnant les quatre étapes F12/Réseau pour copier le XML direct. |
 | Page HSReplay, futur resolver officiel | À exécuter uniquement si une API officielle est un jour activée. | Test dédié et documenté ; ce cas est **non applicable en V3**. |
 
 Pour les URL distantes, utilisez un serveur HTTP contrôlé ou les mocks de la suite.

@@ -51,15 +51,24 @@ acceptable de contourner cette frontière, un refus HTTP ou une protection du si
 ## Décision V3
 
 `HsReplayPageSource` reconnaît syntaxiquement une page officielle, mais sa méthode de
-chargement s’arrête localement, sans requête réseau, avec le message :
+chargement s'arrête localement, sans requête réseau, avec le message :
 
-> Les liens de page HSReplay ne sont pas encore pris en charge.  
-> Utilisez le lien XML direct ou un fichier local.
+> Les liens de page HSReplay ne sont pas pris en charge directement.
+>
+> Pour récupérer le lien direct :
+> 1. Ouvrez le replay sur hsreplay.net dans votre navigateur.
+> 2. Ouvrez les outils de développement (F12) puis l'onglet Réseau.
+> 3. Rechargez la page et filtrez sur ".xml".
+> 4. Copiez l'URL du fichier .hsreplay.xml qui apparaît.
+>
+> Utilisez ensuite ce lien direct, ou téléchargez le fichier et utilisez-le en local.
 
 Le moteur continue de prendre en charge un fichier local ou une URL directe vers le
-XML, y compris une URL signée dont les paramètres restent masqués. Le resolver séparé
-permettra une évolution si HSReplay.net publie une API adaptée ou donne une autorisation
-explicite.
+XML, y compris une URL S3 signée dont les paramètres restent masqués. Ces URL directes
+sont temporaires et expirent typiquement après une heure : elles ne constituent donc
+pas un identifiant durable et ne sont jamais persistées par HSCoach. Le resolver
+séparé permettra une évolution si HSReplay.net publie une API adaptée ou donne une
+autorisation explicite.
 
 ## Contrats de test
 
@@ -67,7 +76,8 @@ La suite V3 doit prouver que :
 
 - `hsreplay.net/replay/<ID>` et `www.hsreplay.net/replay/<ID>` sont reconnus comme
   `HsReplayPageSource` ;
-- l’appel à `load()` rend le message français ci-dessus sans appeler le client HTTP ;
+- l'appel à `load()` rend le message français et les quatre étapes ci-dessus sans
+  appeler le client HTTP ;
 - un domaine ressemblant à `hsreplay.net.example` n’est jamais classé comme page
   officielle ;
 - les URL XML directes utilisent un client mocké, valident le statut, la taille et la

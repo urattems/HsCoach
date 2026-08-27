@@ -58,11 +58,12 @@ La fenêtre principale contient :
 1. une zone **Glissez vos replays Hearthstone ici** ;
 2. un bouton **Parcourir...** pour sélectionner plusieurs fichiers ;
 3. un champ **Ou collez une URL** et un bouton **Ajouter** ;
-4. une liste indiquant pour chaque source `En attente`, `Analyse en cours`, `Terminé`
+4. un champ de collage XML brut et le bouton **Analyser ce texte** ;
+5. une liste indiquant pour chaque source `En attente`, `Analyse en cours`, `Terminé`
    ou `Erreur` ;
-5. le choix du dossier de sortie ;
-6. les formats à produire ;
-7. le bouton **ANALYSER**, la progression réelle du lot et les résultats.
+6. le choix du dossier de sortie ;
+7. les formats à produire ;
+8. le bouton **ANALYSER**, la progression réelle du lot et les résultats.
 
 Les valeurs par défaut sont :
 
@@ -86,6 +87,7 @@ Aucune donnée n’est envoyée à un service d’IA.
 | Source | Statut | Remarque |
 |---|---|---|
 | Fichier `.hsreplay`, `.xml` ou `.txt` | Pris en charge | Le contenu doit être un XML HSReplay valide. |
+| Contenu XML brut collé | Pris en charge | Même validation et même `AnalysisService` que les autres sources. |
 | URL directe vers le XML | Pris en charge | HTTP/HTTPS, 50 Mio et 20 s par défaut. |
 | URL S3 signée | Pris en charge | Sa query string n’est ni affichée ni journalisée. |
 | `https://hsreplay.net/replay/<ID>` | Non pris en charge | La page est reconnue, mais elle n’est pas scrapée. |
@@ -96,10 +98,10 @@ Aucune donnée n’est envoyée à un service d’IA.
 Les liens de page `hsreplay.net/replay/<ID>` ne disposent pas actuellement d’une
 méthode publique, documentée et suffisamment stable permettant à HSCoach d’obtenir le
 XML brut. Le projet n’utilise aucun endpoint privé et ne contourne aucune protection du
-site. L’application répond donc explicitement :
-
-> Les liens de page HSReplay ne sont pas encore pris en charge. Utilisez le lien XML
-> direct ou un fichier local.
+site. L'application indique quatre étapes manuelles : ouvrir les outils de
+développement du navigateur avec F12, afficher l'onglet Réseau, recharger en filtrant
+sur `.xml`, puis copier l'URL `.hsreplay.xml`. Cette URL directe est temporaire et doit
+être utilisée avant son expiration, ou téléchargée comme fichier local.
 
 Le type `HsReplayPageSource` reste séparé du moteur afin qu’une future API officielle
 puisse être ajoutée sans modifier le parsing. Le support ne sera activé qu’avec une

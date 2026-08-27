@@ -76,8 +76,13 @@ def test_hsreplay_page_is_recognized_but_never_requested() -> None:
 
     assert requested is False
     assert str(captured.value) == (
-        "Les liens de page HSReplay ne sont pas encore pris en charge.\n"
-        "Utilisez le lien XML direct ou un fichier local."
+        "Les liens de page HSReplay ne sont pas pris en charge directement.\n\n"
+        "Pour récupérer le lien direct :\n"
+        "1. Ouvrez le replay sur hsreplay.net dans votre navigateur.\n"
+        "2. Ouvrez les outils de développement (F12) puis l'onglet Réseau.\n"
+        '3. Rechargez la page et filtrez sur ".xml".\n'
+        "4. Copiez l'URL du fichier .hsreplay.xml qui apparaît.\n\n"
+        "Utilisez ensuite ce lien direct, ou téléchargez le fichier et utilisez-le en local."
     )
 
 

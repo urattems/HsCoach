@@ -161,16 +161,18 @@ Pour `Options` et `SendOption` :
 - Nettoyer le HTML des textes et résoudre les Card IDs de manière centralisée.
 
 Les sources publiques sont des types explicites : `LocalReplaySource`,
-`DirectXmlUrlSource` et `HsReplayPageSource`. La détection syntaxique n'est pas le
-téléchargement. Elle doit notamment distinguer un chemin Windows d'une URL et comparer
-le hostname normalisé, jamais une sous-chaîne vulnérable telle que
+`DirectXmlUrlSource`, `RawXmlSource` et `HsReplayPageSource`. La détection syntaxique
+n'est pas le téléchargement. Elle doit notamment distinguer un chemin Windows d'une URL
+et comparer le hostname normalisé, jamais une sous-chaîne vulnérable telle que
 `hsreplay.net.example`.
 
 - Une URL directe est téléchargée puis validée comme XML HSReplay ; un HTTP 200 HTML
   reste une erreur.
 - Une URL signée n'est affichée que sous une forme sans query string et n'est jamais
   persistée.
-- Une page `https://hsreplay.net/replay/<ID>` est reconnue mais non résolue en V3.
+- Une page `https://hsreplay.net/replay/<ID>` est reconnue mais non résolue en V3. Le
+  message commun CLI/GUI explique les quatre étapes F12/Réseau pour copier l'URL XML
+  directe, qui reste temporaire.
 - Ne pas sonder d'endpoint privé, analyser le HTML, scraper le site ou contourner un
   refus HTTP. Le resolver retourne le message français documenté.
 - Une future implémentation exige une API officielle/documentée ou une autorisation
