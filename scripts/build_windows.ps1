@@ -119,7 +119,10 @@ Push-Location $repoRoot
 try {
     if (-not $SkipDependencyInstall) {
         $extras = if ($RunTests) { ".[dev,gui,build]" } else { ".[gui,build]" }
-        Invoke-Python -Arguments @("-m", "pip", "install", "--disable-pip-version-check", "-e", $extras)
+        Invoke-Python -Arguments @(
+            "-m", "pip", "install", "--disable-pip-version-check",
+            "-c", (Join-Path $repoRoot "requirements\release.txt"), "-e", $extras
+        )
     }
 
     Invoke-Python -Arguments @("-m", "pip", "check")

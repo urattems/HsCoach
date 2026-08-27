@@ -233,7 +233,7 @@ avec le schéma V1. Il justifie `schema_version = "2.0"` et la version de paquet
 `2.0.0`. Toute nouvelle rupture doit augmenter les deux versions concernées et ajouter
 un test de contrat.
 
-La V3 est une évolution additive du paquet en `2.1.0`. Elle conserve les identifiants
+La RC historique par build est une évolution additive du paquet en `2.2.0`. Elle conserve les identifiants
 de schéma `2.0` et `hscoach-llm/1.0` tant que leurs clés existantes gardent leur sens.
 Les nouveaux champs de provenance, Dormant, classification technique et occurrences
 protocolaires sont additifs ; la correction de `CARD_CREATED` retire une interprétation
@@ -327,8 +327,8 @@ côté de son exécutable et ne demande aucune élévation.
 Le cache attendu est :
 
 ```text
-.cache/hearthstonejson/frFR/cards.json
-.cache/hearthstonejson/frFR/metadata.json
+.cache/hearthstonejson/<build-ou-latest>/frFR/cards.json
+.cache/hearthstonejson/<build-ou-latest>/frFR/metadata.json
 ```
 
 `metadata.json` doit fournir une empreinte SHA-256 valide. La recalculer et la vérifier
@@ -408,16 +408,10 @@ guide, une matrice de tests manuels et aucune donnée utilisateur dans toute l'h
 Git pertinente. Ne pas inventer une URL de dépôt ou de Release si aucun remote n'est
 configuré.
 
-## Préparation Overwolf
+## Overwolf
 
-La V3 ne crée aucune app Overwolf. Une future façade utiliserait un process bridge vers
-un `hscoach-engine.exe` puis `AnalysisService`, sans recopier la logique métier. Ne pas
-ajouter Flask/FastAPI ou un port local pour cette hypothèse.
-
-Hearthstone (`9898`) figure depuis le 2026-08-10 dans la liste officielle des jeux GEP
-dépréciés. Ne construire aucune fonction nécessitant le Game Events Provider. Le futur
-client éventuel repose seulement sur replays, fichiers, logs explicitement supportés et
-URL. Garder `docs/OVERWOLF.md` aligné avec la documentation Overwolf courante.
+Overwolf n'est plus une direction active. `docs/OVERWOLF.md` est une archive historique,
+pas une roadmap. Ne créer aucune app, bridge ou dépendance Overwolf sans mission distincte.
 
 ## Definition of done V3
 

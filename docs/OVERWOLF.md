@@ -1,4 +1,7 @@
-# Préparation d’une future façade Overwolf
+# Archive — ancienne réflexion Overwolf
+
+> Ce document est conservé pour l’historique. Overwolf n’est plus une direction active
+> de HSCoach et les propositions ci-dessous ne constituent pas une roadmap.
 
 HSCoach V3 n’est pas une application Overwolf. Ce document fixe seulement une frontière
 d’architecture afin qu’une façade puisse être ajoutée plus tard sans déplacer la logique

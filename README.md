@@ -33,18 +33,18 @@ passages Dormant sans faux debuff.
 
 ## Installation utilisateur sous Windows
 
-L’archive d’une Release contient un dossier `HSCoach`. Il faut conserver ce dossier
-entier : l’exécutable et ses dépendances fonctionnent ensemble.
+Lorsqu’une archive Windows sera publiée dans une Release, elle contiendra un dossier
+`HSCoach` à conserver entier : l’exécutable et ses dépendances fonctionnent ensemble.
 
-1. Téléchargez l’archive Windows depuis la page **Releases** du projet.
+1. Lorsqu’elle existe, téléchargez l’archive Windows depuis la page **Releases** du projet.
 2. Extrayez-la dans un dossier où votre compte peut écrire, par exemple Documents.
 3. Ouvrez le dossier `HSCoach`.
 4. Lancez `HSCoach.exe`.
 5. Déposez un ou plusieurs replays, choisissez le dossier de sortie, puis cliquez sur
    **ANALYSER**.
 
-Python et les droits administrateur ne sont pas nécessaires. La Release actuelle peut
-être non signée : Windows SmartScreen peut donc afficher un avertissement. Vérifiez que
+Python et les droits administrateur ne sont pas nécessaires pour le bundle. Une archive
+non signée peut déclencher Windows SmartScreen. Vérifiez qu’elle
 l’archive provient bien de la page officielle du projet avant de l’exécuter.
 
 Au premier lancement sans cache valide, les données françaises de cartes doivent être
@@ -246,17 +246,21 @@ src/hscoach/
 └── privacy.py            anonymisation et garde avant écriture
 ```
 
-Une future façade Overwolf serait seulement un client supplémentaire du service. Le
-schéma envisagé est documenté dans [docs/OVERWOLF.md](docs/OVERWOLF.md) ; aucune
-télémétrie live Overwolf n’est utilisée.
+Overwolf n’est plus une direction active du projet. L’ancien document de réflexion est
+conservé comme historique dans [docs/OVERWOLF.md](docs/OVERWOLF.md).
 
 ## Construire l’application Windows
 
-Le build reproductible utilise PyInstaller en mode **one-folder** sur Windows :
+Le build reproductible utilise CPython 3.11 x64, les versions exactes de
+`requirements/release.txt` et PyInstaller en mode **one-folder** sur Windows :
 
 ```powershell
 .\scripts\build_windows.ps1
 ```
+
+Pour mettre à jour l’environnement de Release, modifiez les contraintes, recréez un
+environnement Python 3.11 x64 propre, exécutez tous les contrôles et regénérez
+`requirements/release.txt` à partir des versions effectivement validées.
 
 Le résultat attendu est `dist/HSCoach/HSCoach.exe`. PyInstaller n’est pas un
 cross-compilateur : une Release Windows doit être construite et testée sur Windows.
@@ -294,13 +298,14 @@ privée. Ne l’ajoutez jamais à un ticket ou à un dépôt public.
 - Une annulation ne tue pas brutalement un parseur déjà en cours.
 - Les pages publiques HSReplay ne sont pas résolues vers le XML.
 - Le cache de cartes doit être téléchargé au moins une fois avant un usage hors ligne.
+- HSCoach préfère le snapshot HearthstoneJSON du build du replay. Si ce snapshot est
+  indisponible, le repli sur `latest` est signalé dans les avertissements et métadonnées.
 - Une archive Windows non signée peut déclencher SmartScreen ; la signature de code
   est un chantier de distribution distinct.
 
 ## Roadmap
 
 - activer les pages HSReplay uniquement si une API officielle adaptée apparaît ;
-- stabiliser une interface machine pour un futur client Overwolf ;
 - enrichir les fixtures synthétiques des interactions Hearthstone encore non classées ;
 - ajouter signature de code et automatisation de Release lorsque le dépôt public est
   configuré.

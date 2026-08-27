@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68,<82"]
+requires = ["setuptools>=68,<81"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -17,7 +17,7 @@ dependencies = [
     "hsreplay==1.16.2",
     "httpx>=0.28.1,<0.29",
     # hsreplay 1.16.2 importe encore pkg_resources à l'exécution.
-    "setuptools>=68,<82",
+    "setuptools>=68,<81",
 ]
 
 [project.optional-dependencies]
