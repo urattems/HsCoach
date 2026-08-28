@@ -44,8 +44,8 @@ Lorsqu’une archive Windows sera publiée dans une Release, elle contiendra un 
    **ANALYSER**.
 
 Python et les droits administrateur ne sont pas nécessaires pour le bundle. Une archive
-non signée peut déclencher Windows SmartScreen. Vérifiez qu’elle
-l’archive provient bien de la page officielle du projet avant de l’exécuter.
+non signée peut déclencher Windows SmartScreen. Vérifiez que l’archive provient bien
+de la page officielle du projet avant de l’exécuter.
 
 Au premier lancement sans cache valide, les données françaises de cartes doivent être
 téléchargées. Une fois ce cache créé, les analyses suivantes peuvent fonctionner hors
@@ -111,11 +111,11 @@ décision sont consignées dans
 
 ## Rapports produits
 
-Chaque partie possède son propre sous-dossier `<game-id>` sécurisé dans le répertoire
-choisi, ce qui préserve le contrat V2 de la CLI. Selon les cases cochées, HSCoach crée :
+Chaque partie possède son propre sous-dossier `<date>-<matchup>-<game-id>` sécurisé
+dans le répertoire choisi. Selon les cases cochées, HSCoach crée :
 
 ```text
-<dossier-de-sortie>/<game-id>/
+<dossier-de-sortie>/<date>-<matchup>-<game-id>/
 ├── game_summary.md
 ├── game_llm.json
 └── game_analysis.json
@@ -259,7 +259,7 @@ L'environnement de build verrouillé et reproductible utilise CPython 3.11 x64, 
 ```
 
 Pour mettre à jour l’environnement de Release, modifiez les contraintes, recréez un
-environnement Python 3.11 x64 propre, exécutez tous les contrôles et regénérez
+environnement Python 3.11 x64 propre, exécutez tous les contrôles et régénérez
 `requirements/release.txt` à partir des versions effectivement validées.
 
 Le résultat attendu est `dist/HSCoach/HSCoach.exe`. PyInstaller n’est pas un
@@ -281,8 +281,9 @@ La checklist détaillée se trouve dans
 - La query string d’une URL signée n’est ni affichée, ni loggée, ni persistée dans les
   réglages.
 - Aucun historique de replay ou d’URL n’est conservé par la GUI.
-- Les XML avec DTD ou entité externe sont refusés ; aucun fichier déposé n’est exécuté
-  ou extrait comme archive.
+- Les sous-ensembles DTD internes et les déclarations d’entité sont refusés. Le
+  `DOCTYPE` externe simple officiel est accepté sans résolution de ressource ; aucun
+  fichier déposé n’est exécuté ou extrait comme archive.
 - Taille, timeout, racine XML et dossier de sortie sont validés.
 - `samples/`, `output/`, `.cache/`, `.venv/`, `dist/` et `build/` sont ignorés par Git.
 

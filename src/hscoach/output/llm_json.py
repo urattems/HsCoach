@@ -493,7 +493,7 @@ def export_llm_json(
     analysis: GameAnalysis,
     output_directory: str | Path = Path("output"),
 ) -> Path:
-    """Écrire atomiquement ``output/<game-id>/game_llm.json``."""
+    """Écrire atomiquement le JSON compact dans le dossier de rapport de la partie."""
 
     rendered = render_llm_json(analysis)
     root = Path(output_directory).expanduser().resolve()

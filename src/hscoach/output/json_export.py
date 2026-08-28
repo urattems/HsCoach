@@ -83,7 +83,7 @@ def export_json(
     analysis: GameAnalysis,
     output_directory: str | Path = Path("output"),
 ) -> Path:
-    """Écrire atomiquement ``output/<game-id>/game_analysis.json``.
+    """Écrire atomiquement le JSON dans le dossier de rapport de la partie.
 
     Le chemin retourné est absolu. Un identifiant de partie inhabituel est remplacé
     par un identifiant opaque et déterministe afin qu'il ne puisse jamais influencer

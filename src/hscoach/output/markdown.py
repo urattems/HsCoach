@@ -33,7 +33,7 @@ def export_markdown(
     analysis: GameAnalysis,
     output_directory: str | Path = Path("output"),
 ) -> Path:
-    """Écrire atomiquement ``output/<game-id>/game_summary.md``."""
+    """Écrire atomiquement le Markdown dans le dossier de rapport de la partie."""
 
     from hscoach.output.json_export import report_directory_name
 
