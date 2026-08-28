@@ -1282,18 +1282,66 @@ def _packet_protocol_orders(context: ReplayContext) -> dict[int, int]:
                 visit(children)
 
     visit(context.packet_tree)
-    packet_tags = [type(packet).__name__ for packet in packets]
+    packet_signatures = [_packet_protocol_signature(packet) for packet in packets]
     xml_items = [
-        (protocol_order, element.tag)
+        (protocol_order, _xml_protocol_signature(element))
         for protocol_order, element in enumerate(context.game_xml.iter())
         if element.tag in {packet_type.__name__ for packet_type in _ORDERED_PACKET_TYPES}
     ]
-    if packet_tags != [tag for _, tag in xml_items]:
+    if packet_signatures != [signature for _, signature in xml_items]:
         return {}
     return {
         id(packet): protocol_order
         for packet, (protocol_order, _) in zip(packets, xml_items, strict=True)
     }
+
+
+def _packet_protocol_signature(packet: object) -> tuple[object, ...]:
+    packet_type = type(packet).__name__
+    entity_id = _entity_id(getattr(packet, "entity", None))
+    if isinstance(packet, Block):
+        return (packet_type, entity_id, int(packet.type), _entity_id(packet.target) or 0)
+    if isinstance(packet, FullEntity):
+        return (packet_type, entity_id, getattr(packet, "card_id", None) or None)
+    if isinstance(packet, ShowEntity | ChangeEntity):
+        return (packet_type, entity_id, getattr(packet, "card_id", None) or None)
+    if isinstance(packet, HideEntity):
+        return (packet_type, entity_id, int(packet.zone))
+    if isinstance(packet, TagChange | CachedTagForDormantChange):
+        return (packet_type, entity_id, int(packet.tag), int(packet.value))
+    return (packet_type,)
+
+
+def _xml_protocol_signature(element: object) -> tuple[object, ...]:
+    packet_type = element.tag
+    entity_attribute = "id" if packet_type == "FullEntity" else "entity"
+    entity_id = _entity_id(element.attrib.get(entity_attribute))
+    if packet_type == "Block":
+        return (
+            packet_type,
+            entity_id,
+            _integer_attribute(element, "type"),
+            _integer_attribute(element, "target") or 0,
+        )
+    if packet_type in {"FullEntity", "ShowEntity", "ChangeEntity"}:
+        return (packet_type, entity_id, element.attrib.get("cardID") or None)
+    if packet_type == "HideEntity":
+        return (packet_type, entity_id, _integer_attribute(element, "zone"))
+    if packet_type in {"TagChange", "CachedTagForDormantChange"}:
+        return (
+            packet_type,
+            entity_id,
+            _integer_attribute(element, "tag"),
+            _integer_attribute(element, "value"),
+        )
+    return (packet_type,)
+
+
+def _integer_attribute(element: object, name: str) -> int | None:
+    try:
+        return int(element.attrib[name])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def extract_timeline(

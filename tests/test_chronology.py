@@ -187,6 +187,15 @@ def test_packet_tree_alignment_rejects_a_single_xml_mismatch_without_shifting() 
     assert any(warning.code == "ordre_protocole_indisponible" for warning in timeline.warnings)
 
 
+def test_packet_tree_alignment_rejects_reordered_identical_packet_types() -> None:
+    context = parse_replay_data(MINIMAL_REPLAY.read_bytes())
+    tag_changes = list(context.game_xml.iter("TagChange"))
+    assert len(tag_changes) >= 2
+    tag_changes[0].attrib, tag_changes[1].attrib = tag_changes[1].attrib, tag_changes[0].attrib
+
+    assert _packet_protocol_orders(context) == {}
+
+
 def test_choice_zero_sentinel_does_not_become_earliest_without_common_order() -> None:
     actions = [_action(40, "action A"), _action(41, "action B")]
     choice = _choice(1, "Choix")
