@@ -136,8 +136,15 @@ def test_discover_opponent_side_and_delta_mapping_survive_merge() -> None:
     )
     turn = SimpleNamespace(actions=[before, after], entity_deltas=[delta])
     protocol_orders = {id(before): 10, id(after): 30}
-    protocol_orders.update(_attach_choice_actions(turn, [choice], {id(choice): 20}))
     important_events = [after]
+    protocol_orders.update(
+        _attach_choice_actions(
+            turn,
+            [choice],
+            {id(choice): 20},
+            important_events=important_events,
+        )
+    )
 
     _normalize_action_sequences([], [turn], protocol_orders)
 
@@ -148,7 +155,10 @@ def test_discover_opponent_side_and_delta_mapping_survive_merge() -> None:
     ]
     assert turn.actions[1].player is PlayerSide.OPPONENT
     assert delta.sequence == after.sequence
-    assert important_events[0].sequence in {action.sequence for action in turn.actions}
+    assert important_events == [after, turn.actions[1]]
+    assert all(
+        event.sequence in {action.sequence for action in turn.actions} for event in important_events
+    )
     assert len({action.sequence for action in turn.actions}) == len(turn.actions)
 
 
@@ -194,6 +204,25 @@ def test_packet_tree_alignment_rejects_reordered_identical_packet_types() -> Non
     tag_changes[0].attrib, tag_changes[1].attrib = tag_changes[1].attrib, tag_changes[0].attrib
 
     assert _packet_protocol_orders(context) == {}
+
+
+def test_future_packet_value_degrades_protocol_alignment_without_crashing() -> None:
+    context = parse_replay_data(MINIMAL_REPLAY.read_bytes())
+    packet = next(item for item in context.packet_tree if hasattr(item, "tag"))
+    packet.tag = object()
+
+    assert _packet_protocol_orders(context) == {}
+
+    facts = extract_replay_facts(context)
+    timeline = extract_timeline(
+        context,
+        CardResolver({}),
+        player_entity_id=facts.player.entity_id,
+        opponent_entity_id=facts.opponent.entity_id,
+    )
+
+    assert timeline.action_protocol_orders == {}
+    assert any(warning.code == "ordre_protocole_indisponible" for warning in timeline.warnings)
 
 
 def test_choice_zero_sentinel_does_not_become_earliest_without_common_order() -> None:

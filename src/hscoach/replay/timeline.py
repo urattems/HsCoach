@@ -551,15 +551,18 @@ class _TimelineBuilder:
         entity_id = _entity_id(packet.entity)
         if entity_id is None:
             return
+        tag_value = _optional_protocol_int(getattr(packet, "tag", None))
+        current_value = _optional_protocol_int(getattr(packet, "value", None))
+        if tag_value is None or current_value is None:
+            return
         try:
-            tag = GameTag(packet.tag)
+            tag = GameTag(tag_value)
         except ValueError:
             return
         if tag not in {GameTag.ATK, GameTag.HEALTH, GameTag.DAMAGE}:
             return
 
         state = self.entities.setdefault(entity_id, _EntityState(entity_id))
-        current_value = int(packet.value)
         if (
             not state.tags.get(GameTag.DORMANT)
             and tag in state.dormant_restore_tags
@@ -586,18 +589,22 @@ class _TimelineBuilder:
         entity_id = _entity_id(packet.entity)
         if entity_id is None:
             return
+        tag_value = _optional_protocol_int(getattr(packet, "tag", None))
+        current_value = _optional_protocol_int(getattr(packet, "value", None))
+        if tag_value is None or current_value is None:
+            return
         try:
-            tag = GameTag(packet.tag)
+            tag = GameTag(tag_value)
         except ValueError:
             return
         state = self.entities.setdefault(entity_id, _EntityState(entity_id))
         previous_zone = state.zone
         previous_value = state.tags.get(tag)
         was_dormant = bool(state.tags.get(GameTag.DORMANT))
-        state.tags[tag] = int(packet.value)
+        state.tags[tag] = current_value
 
-        if tag is GameTag.DORMANT and bool(previous_value) != bool(packet.value):
-            if packet.value:
+        if tag is GameTag.DORMANT and bool(previous_value) != bool(current_value):
+            if current_value:
                 state.dormant_projection_tags = {
                     cached_tag
                     for cached_tag in state.dormant_cached_tags
@@ -611,22 +618,22 @@ class _TimelineBuilder:
                     if cached_tag in {GameTag.ATK, GameTag.HEALTH, GameTag.DAMAGE}
                 }
                 state.dormant_projection_tags.clear()
-            self._record_dormant_change(state, was_dormant, bool(packet.value))
+            self._record_dormant_change(state, was_dormant, bool(current_value))
 
         if tag is GameTag.CURRENT_PLAYER:
-            if packet.value:
+            if current_value:
                 self.active_player_entity_id = entity_id
             elif self.active_player_entity_id == entity_id:
                 self.active_player_entity_id = None
-        elif tag is GameTag.TURN and entity_id == self.game_entity_id and packet.value > 0:
+        elif tag is GameTag.TURN and entity_id == self.game_entity_id and current_value > 0:
             if not self.turns:
                 # TURN=1 précède le mulligan dans les replays réels. Attendre
                 # MAIN_READY évite de présenter la main initiale comme des pioches.
-                self.pending_first_turn = int(packet.value)
+                self.pending_first_turn = current_value
             else:
-                self._start_turn(int(packet.value))
+                self._start_turn(current_value)
         elif tag is GameTag.STEP:
-            if self.pending_first_turn is not None and packet.value in {
+            if self.pending_first_turn is not None and current_value in {
                 Step.MAIN_READY,
                 Step.MAIN_RESOURCE,
                 Step.MAIN_DRAW,
@@ -636,13 +643,13 @@ class _TimelineBuilder:
             }:
                 self._start_turn(self.pending_first_turn)
                 self.pending_first_turn = None
-            self._update_phase(packet.value)
-            if packet.value == Step.MAIN_END:
+            self._update_phase(current_value)
+            if current_value == Step.MAIN_END:
                 self._emit_explicit_end_turn()
         elif tag is GameTag.ZONE:
             self._handle_zone_change(state, previous_zone, state.zone)
         elif tag is GameTag.PLAYSTATE:
-            self._emit_playstate(entity_id, int(packet.value))
+            self._emit_playstate(entity_id, current_value)
 
         if self.current_turn is not None and tag in {
             GameTag.DAMAGE,
@@ -654,13 +661,13 @@ class _TimelineBuilder:
                 state,
                 tag,
                 previous_value,
-                int(packet.value),
+                current_value,
             )
             self._record_stat_change(
                 state,
                 tag,
                 previous_value,
-                int(packet.value),
+                current_value,
                 technical_reason=technical_reason,
             )
 
@@ -1300,16 +1307,35 @@ def _packet_protocol_signature(packet: object) -> tuple[object, ...]:
     packet_type = type(packet).__name__
     entity_id = _entity_id(getattr(packet, "entity", None))
     if isinstance(packet, Block):
-        return (packet_type, entity_id, int(packet.type), _entity_id(packet.target) or 0)
+        return (
+            packet_type,
+            entity_id,
+            _optional_protocol_int(getattr(packet, "type", None)),
+            _entity_id(getattr(packet, "target", None)) or 0,
+        )
     if isinstance(packet, FullEntity):
         return (packet_type, entity_id, getattr(packet, "card_id", None) or None)
     if isinstance(packet, ShowEntity | ChangeEntity):
         return (packet_type, entity_id, getattr(packet, "card_id", None) or None)
     if isinstance(packet, HideEntity):
-        return (packet_type, entity_id, int(packet.zone))
+        return (packet_type, entity_id, _optional_protocol_int(getattr(packet, "zone", None)))
     if isinstance(packet, TagChange | CachedTagForDormantChange):
-        return (packet_type, entity_id, int(packet.tag), int(packet.value))
+        return (
+            packet_type,
+            entity_id,
+            _optional_protocol_int(getattr(packet, "tag", None)),
+            _optional_protocol_int(getattr(packet, "value", None)),
+        )
     return (packet_type,)
+
+
+def _optional_protocol_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _xml_protocol_signature(element: object) -> tuple[object, ...]:

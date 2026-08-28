@@ -207,13 +207,19 @@ def build_game_analysis(facts: ReplayFacts, resolver: object) -> GameAnalysis:
         if turn is not None:
             turn.choices.extend(items)
             timeline.action_protocol_orders.update(
-                _attach_choice_actions(turn, items, decisions.choice_protocol_orders)
+                _attach_choice_actions(
+                    turn,
+                    items,
+                    decisions.choice_protocol_orders,
+                    important_events=timeline.important_events,
+                )
             )
     _normalize_action_sequences(
         timeline.start_of_game_events,
         timeline.turns,
         timeline.action_protocol_orders,
     )
+    timeline.important_events.sort(key=lambda action: action.sequence)
 
     unresolved_ids = list(resolver.unresolved_ids)
     warnings = [
@@ -302,6 +308,8 @@ def _attach_choice_actions(
     turn: object,
     choices: list[object],
     choice_protocol_orders: dict[int, int],
+    *,
+    important_events: list[GameAction] | None = None,
 ) -> dict[int, int]:
     action_protocol_orders: dict[int, int] = {}
     for choice in choices:
@@ -331,6 +339,8 @@ def _attach_choice_actions(
             },
         )
         turn.actions.append(action)
+        if important_events is not None:
+            important_events.append(action)
         protocol_order = choice_protocol_orders.get(id(choice))
         if protocol_order is not None:
             action_protocol_orders[id(action)] = protocol_order

@@ -68,6 +68,8 @@ def extract_decisions(
             if element.attrib.get("entity") == game_entity_id:
                 turn_number = _integer(element.attrib.get("value")) or turn_number
         elif element.tag == "Options":
+            if pending is not None:
+                result.by_turn.setdefault(pending[0], []).append(pending[1])
             sequence += 1
             decision = Decision(
                 sequence=sequence,

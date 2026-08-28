@@ -75,6 +75,19 @@ def test_general_choice_is_classified_as_discover_only_from_explicit_card_mechan
     assert choice.completed is True
 
 
+def test_new_options_packet_preserves_previous_unanswered_decision() -> None:
+    context = parse_replay_data(_consecutive_options_fixture())
+
+    result = extract_decisions(context, CardResolver({}))
+
+    decisions = result.by_turn[1]
+    assert len(decisions) == 2
+    assert decisions[0].selected_option_index is None
+    assert decisions[1].selected_option_index == 1
+    assert decisions[0].options[0].selected is False
+    assert decisions[1].options[0].selected is True
+
+
 def _choice_fixture() -> bytes:
     return b"""\
 <HSReplay build="1" version="1.7">
@@ -90,5 +103,24 @@ def _choice_fixture() -> bytes:
 <Choice entity="11"/><Choice entity="12"/>
 </Choices>
 <SendChoices id="7" type="2"><Choice entity="12"/></SendChoices>
+</Game></HSReplay>
+"""
+
+
+def _consecutive_options_fixture() -> bytes:
+    return b"""\
+<HSReplay build="1" version="1.7">
+<Game id="options"><GameEntity id="1"/>
+<Player id="2" playerID="1" accountHi="0" accountLo="1"/>
+<Player id="3" playerID="2" accountHi="0" accountLo="2"/>
+<TagChange entity="1" tag="20" value="1"/>
+<Options id="1" ts="2026-01-01T00:00:01+00:00">
+<Option index="0" type="2"/>
+</Options>
+<Options id="2" ts="2026-01-01T00:00:02+00:00">
+<Option index="1" type="2"/>
+</Options>
+<SendOption option="1" subOption="0" target="0" position="0"
+ ts="2026-01-01T00:00:03+00:00"/>
 </Game></HSReplay>
 """
