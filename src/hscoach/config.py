@@ -28,4 +28,4 @@ class AppConfig:
     def card_cache_directory(self) -> Path:
         """Retourner le dossier de cache HearthstoneJSON pour la locale active."""
 
-        return self.cache_directory / "hearthstonejson" / self.locale
+        return self.cache_directory / "hearthstonejson" / "latest" / self.locale

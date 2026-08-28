@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
+import re
 import tempfile
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -25,6 +28,7 @@ DEFAULT_CACHE_DIRECTORY = Path(".cache")
 DEFAULT_LOCALE = "frFR"
 DEFAULT_MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024
 DEFAULT_TIMEOUT = 20.0
+_SAFE_LOCALE = re.compile(r"[a-z]{2}[A-Z]{2}")
 
 
 class _ReadableTextParser(HTMLParser):
@@ -153,13 +157,22 @@ class HearthstoneJSON:
         timeout: float = DEFAULT_TIMEOUT,
         max_download_size: int = DEFAULT_MAX_DOWNLOAD_SIZE,
     ) -> None:
-        if not locale or "/" in locale or "\\" in locale or locale in {".", ".."}:
+        if not isinstance(locale, str) or _SAFE_LOCALE.fullmatch(locale) is None:
             raise ValueError("La locale HearthstoneJSON n'est pas valide.")
         if build is not None and (isinstance(build, bool) or not str(build).isdigit()):
             raise ValueError("Le build HearthstoneJSON n'est pas valide.")
-        if timeout <= 0:
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, int | float)
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
             raise ValueError("Le délai HTTP doit être positif.")
-        if max_download_size <= 0:
+        if (
+            isinstance(max_download_size, bool)
+            or not isinstance(max_download_size, int)
+            or max_download_size <= 0
+        ):
             raise ValueError("La taille maximale doit être positive.")
 
         self.cache_directory = Path(cache_directory)
@@ -344,6 +357,10 @@ class HearthstoneJSON:
         return b"".join(chunks)
 
     def _write_cache(self, payload: bytes, *, card_count: int) -> None:
+        temporary: dict[Path, Path] = {}
+        backups: dict[Path, Path] = {}
+        committed: list[Path] = []
+        committed_all = False
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             metadata: dict[str, Any] = {
@@ -359,16 +376,33 @@ class HearthstoneJSON:
                 json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
             ).encode("utf-8")
 
-            cards_temporary = self._write_temporary(payload, suffix=".cards.tmp")
-            metadata_temporary = self._write_temporary(metadata_payload, suffix=".metadata.tmp")
-            try:
-                os.replace(cards_temporary, self.cards_path)
-                os.replace(metadata_temporary, self.metadata_path)
-            finally:
-                cards_temporary.unlink(missing_ok=True)
-                metadata_temporary.unlink(missing_ok=True)
+            temporary[self.cards_path] = self._write_temporary(payload, suffix=".cards.tmp")
+            temporary[self.metadata_path] = self._write_temporary(
+                metadata_payload, suffix=".metadata.tmp"
+            )
+            for destination in temporary:
+                if destination.exists():
+                    backup = self._reserve_temporary_path(suffix=".rollback.tmp")
+                    backups[destination] = backup
+                    os.replace(destination, backup)
+            for destination, source in temporary.items():
+                os.replace(source, destination)
+                committed.append(destination)
+            committed_all = True
         except OSError as exc:
-            raise CardDataError("Le cache HearthstoneJSON ne peut pas être mis à jour.") from exc
+            rollback_failed = self._rollback_cache(committed, backups)
+            message = "Le cache HearthstoneJSON ne peut pas être mis à jour."
+            if rollback_failed:
+                message += " Son état précédent n'a pas pu être restauré intégralement."
+            raise CardDataError(message) from exc
+        finally:
+            for path in temporary.values():
+                with suppress(OSError):
+                    path.unlink(missing_ok=True)
+            if committed_all:
+                for path in backups.values():
+                    with suppress(OSError):
+                        path.unlink(missing_ok=True)
 
     def _write_temporary(self, payload: bytes, *, suffix: str) -> Path:
         descriptor, raw_path = tempfile.mkstemp(dir=self.cache_dir, suffix=suffix)
@@ -382,3 +416,30 @@ class HearthstoneJSON:
             temporary_path.unlink(missing_ok=True)
             raise
         return temporary_path
+
+    def _reserve_temporary_path(self, *, suffix: str) -> Path:
+        descriptor, raw_path = tempfile.mkstemp(dir=self.cache_dir, suffix=suffix)
+        os.close(descriptor)
+        temporary_path = Path(raw_path)
+        temporary_path.unlink()
+        return temporary_path
+
+    @staticmethod
+    def _rollback_cache(committed: list[Path], backups: dict[Path, Path]) -> bool:
+        rollback_failed = False
+        for destination in committed:
+            if destination in backups:
+                continue
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                rollback_failed = True
+        for destination, backup in backups.items():
+            if not backup.exists():
+                continue
+            try:
+                os.replace(backup, destination)
+            except OSError:
+                # Garder le backup plutôt que supprimer la dernière copie récupérable.
+                rollback_failed = True
+        return rollback_failed

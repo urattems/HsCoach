@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from pathlib import Path
 
 import httpx
 import pytest
@@ -226,6 +228,75 @@ def test_refresh_atomically_replaces_existing_cache(tmp_path) -> None:
     assert "OLD" not in cards
     assert refreshed_service.cards_path.read_bytes() == cards_json()
     assert not list(refreshed_service.cache_dir.glob("*.tmp"))
+
+
+def test_refresh_restores_complete_cache_if_metadata_commit_fails(tmp_path, monkeypatch) -> None:
+    old_payload = json.dumps([{"id": "OLD", "name": "Ancienne carte"}]).encode()
+    service = HearthstoneJSON(tmp_path)
+    write_cache(service, old_payload)
+    old_metadata = service.metadata_path.read_bytes()
+    original_replace = os.replace
+
+    def failing_replace(source, destination):
+        if (
+            Path(source).name.endswith(".metadata.tmp")
+            and Path(destination) == service.metadata_path
+        ):
+            raise OSError("échec simulé")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=cards_json())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        cards = HearthstoneJSON(tmp_path, client=client).refresh()
+
+    assert set(cards) == {"OLD"}
+    assert service.cards_path.read_bytes() == old_payload
+    assert service.metadata_path.read_bytes() == old_metadata
+    assert not list(service.cache_dir.glob("*.tmp"))
+
+
+def test_cache_update_cleans_first_temporary_if_second_creation_fails(
+    tmp_path, monkeypatch
+) -> None:
+    service = HearthstoneJSON(tmp_path)
+    original_write_temporary = service._write_temporary
+    call_count = 0
+
+    def failing_write_temporary(payload, *, suffix):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise OSError("échec simulé")
+        return original_write_temporary(payload, suffix=suffix)
+
+    monkeypatch.setattr(service, "_write_temporary", failing_write_temporary)
+
+    with pytest.raises(CardDataError, match="ne peut pas être mis à jour"):
+        service._write_cache(cards_json(), card_count=2)
+
+    assert not list(service.cache_dir.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("locale", ["", "../enUS", "frFR?x=1", "frFR:alt", True])
+def test_invalid_locale_is_rejected_before_url_or_path_construction(tmp_path, locale) -> None:
+    with pytest.raises(ValueError, match="locale HearthstoneJSON"):
+        HearthstoneJSON(tmp_path, locale=locale)
+
+
+@pytest.mark.parametrize("timeout", [True, "20", 0, float("nan"), float("inf")])
+def test_invalid_card_download_timeout_is_rejected(tmp_path, timeout) -> None:
+    with pytest.raises(ValueError, match="délai HTTP"):
+        HearthstoneJSON(tmp_path, timeout=timeout)
+
+
+@pytest.mark.parametrize("max_download_size", [True, 1.5, "100", 0])
+def test_invalid_card_download_size_is_rejected(tmp_path, max_download_size) -> None:
+    with pytest.raises(ValueError, match="taille maximale"):
+        HearthstoneJSON(tmp_path, max_download_size=max_download_size)
 
 
 def test_offline_without_cache_reports_clear_french_error(tmp_path) -> None:

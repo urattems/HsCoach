@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,6 +70,9 @@ def export_analysis(
     if export_llm_json:
         rendered[LLM_JSON_FILENAME] = render_llm_json(analysis)
 
+    if not rendered:
+        return ExportedReports()
+
     root = Path(output_directory).expanduser().resolve()
     directory = (root / report_directory_name(analysis)).resolve()
     if not directory.is_relative_to(root):
@@ -76,8 +80,11 @@ def export_analysis(
     temporary: dict[str, Path] = {}
     backups: dict[Path, Path] = {}
     committed: list[Path] = []
+    committed_all = False
     try:
         directory.mkdir(parents=True, exist_ok=True)
+        if not directory.resolve().is_relative_to(root):
+            raise ExportError("Le dossier de sortie pointe hors du dossier autorisé.")
         for name, content in rendered.items():
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -104,23 +111,40 @@ def export_analysis(
             destination = directory / name
             source.replace(destination)
             committed.append(destination)
+        committed_all = True
         return ExportedReports(
             markdown=directory / MARKDOWN_FILENAME if export_markdown else None,
             json=directory / JSON_FILENAME if export_full_json else None,
             llm=directory / LLM_JSON_FILENAME if export_llm_json else None,
         )
     except OSError as exc:
+        rollback_failed = False
         for path in committed:
-            path.unlink(missing_ok=True)
+            if path in backups:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                rollback_failed = True
         for destination, backup in backups.items():
             if backup.exists():
-                backup.replace(destination)
-        raise ExportError("Le lot de rapports n'a pas pu être écrit intégralement.") from exc
+                try:
+                    backup.replace(destination)
+                except OSError:
+                    # Conserver la sauvegarde si le système refuse aussi le rollback.
+                    rollback_failed = True
+        message = "Le lot de rapports n'a pas pu être écrit intégralement."
+        if rollback_failed:
+            message += " Le lot précédent n'a pas pu être restauré intégralement."
+        raise ExportError(message) from exc
     finally:
         for path in temporary.values():
-            path.unlink(missing_ok=True)
-        for path in backups.values():
-            path.unlink(missing_ok=True)
+            with suppress(OSError):
+                path.unlink(missing_ok=True)
+        if committed_all:
+            for path in backups.values():
+                with suppress(OSError):
+                    path.unlink(missing_ok=True)
 
 
 __all__ = [

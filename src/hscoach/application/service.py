@@ -151,18 +151,12 @@ class AnalysisService:
                     source_label=loaded.source_label,
                     max_size_bytes=self.config.max_download_size_bytes,
                 )
-                analysis.metadata.card_data_status = card_status
-                analysis.metadata.card_data_build = card_build
-                if card_status == "fallback":
-                    analysis.warnings.append(
-                        ParseWarning(
-                            code="hearthstonejson_build_fallback",
-                            message=(
-                                f"Les données exactes du build {replay_build} sont indisponibles ; "
-                                "les définitions HearthstoneJSON courantes ont été utilisées."
-                            ),
-                        )
-                    )
+                self._apply_card_data_resolution(
+                    analysis,
+                    replay_build=replay_build,
+                    status=card_status,
+                    resolved_build=card_build,
+                )
                 if (
                     isinstance(source, RawXmlSource)
                     and analysis.metadata.game_id == "partie-inconnue"
@@ -277,8 +271,12 @@ class AnalysisService:
             source_label=loaded.source_label,
             max_size_bytes=self.config.max_download_size_bytes,
         )
-        analysis.metadata.card_data_status = status
-        analysis.metadata.card_data_build = card_build
+        self._apply_card_data_resolution(
+            analysis,
+            replay_build=replay_build,
+            status=status,
+            resolved_build=card_build,
+        )
         return analysis
 
     def refresh_cards(self, *, locale: str | None = None) -> Mapping[str, Card]:
@@ -327,6 +325,30 @@ class AnalysisService:
         except (ElementTree.ParseError, ValueError, TypeError):
             return None
         return build if build and build.isdigit() else None
+
+    @staticmethod
+    def _apply_card_data_resolution(
+        analysis: GameAnalysis,
+        *,
+        replay_build: str | None,
+        status: str,
+        resolved_build: str | None,
+    ) -> None:
+        """Conserver le même signal de résolution dans tous les frontends."""
+
+        analysis.metadata.card_data_status = status
+        analysis.metadata.card_data_build = resolved_build
+        if status == "fallback":
+            requested_build = replay_build or "inconnu"
+            analysis.warnings.append(
+                ParseWarning(
+                    code="hearthstonejson_build_fallback",
+                    message=(
+                        f"Les données exactes du build {requested_build} sont indisponibles ; "
+                        "les définitions HearthstoneJSON courantes ont été utilisées."
+                    ),
+                )
+            )
 
     @staticmethod
     def _emit(

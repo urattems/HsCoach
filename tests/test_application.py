@@ -65,6 +65,11 @@ class FakeCards:
         return {}
 
 
+class FallbackCards(FakeCards):
+    resolution = "fallback"
+    resolved_build = None
+
+
 def test_batch_continues_after_error_and_loads_cards_once(tmp_path: Path) -> None:
     FakeCards.load_count = 0
     first = FakeSource("premier.xml", b"first")
@@ -189,6 +194,22 @@ def test_inspect_uses_same_loading_and_analysis_without_export(tmp_path: Path) -
     assert export_called is False
 
 
+def test_inspect_reports_card_build_fallback_like_batch_analysis(tmp_path: Path) -> None:
+    source = FakeSource("inspect.xml", b'<HSReplay build="248348" />')
+    service = AnalysisService(
+        AppConfig(cache_directory=tmp_path / "cache"),
+        card_provider_factory=FallbackCards,
+        analyzer=lambda *args, **kwargs: _analysis("inspect"),
+    )
+
+    analysis = service.inspect(source)
+
+    assert analysis.metadata.card_data_status == "fallback"
+    assert analysis.metadata.card_data_build is None
+    assert [warning.code for warning in analysis.warnings] == ["hearthstonejson_build_fallback"]
+    assert "248348" in analysis.warnings[0].message
+
+
 def test_selective_exports_keep_historical_defaults(tmp_path: Path) -> None:
     analysis = _analysis()
 
@@ -208,6 +229,27 @@ def test_selective_exports_keep_historical_defaults(tmp_path: Path) -> None:
     assert historical.markdown is not None and historical.markdown.is_file()
     assert historical.llm is not None and historical.llm.is_file()
     assert historical.json is not None and historical.json.is_file()
+
+
+def test_disabled_exports_do_not_create_an_empty_output_directory(tmp_path: Path) -> None:
+    output_directory = tmp_path / "absent"
+
+    reports = export_analysis(
+        _analysis(),
+        output_directory,
+        export_markdown=False,
+        export_full_json=False,
+        export_llm_json=False,
+    )
+
+    assert reports == ExportedReports()
+    assert not output_directory.exists()
+
+
+def test_card_cache_directory_matches_latest_provider_layout(tmp_path: Path) -> None:
+    config = AppConfig(cache_directory=tmp_path, locale="frFR")
+
+    assert config.card_cache_directory == tmp_path / "hearthstonejson" / "latest" / "frFR"
 
 
 @pytest.mark.parametrize("failure_number", [2, 3])
@@ -232,3 +274,63 @@ def test_report_set_rolls_back_if_a_commit_fails(
     assert not list(tmp_path.rglob("game_*.json"))
     assert not list(tmp_path.rglob("game_summary.md"))
     assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_report_set_restores_previous_files_if_reexport_fails(tmp_path: Path, monkeypatch) -> None:
+    reports = export_analysis(_analysis(), tmp_path)
+    assert reports.directory is not None
+    previous = {
+        path.name: path.read_bytes() for path in reports.directory.iterdir() if path.is_file()
+    }
+    changed = _analysis()
+    changed.metadata.result = "Défaite"
+    original_replace = Path.replace
+    commit_count = 0
+
+    def failing_replace(source: Path, target: Path):
+        nonlocal commit_count
+        if source.suffix == ".tmp" and "rollback" not in source.name:
+            commit_count += 1
+            if commit_count == 2:
+                raise OSError("échec simulé")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+
+    with pytest.raises(ExportError, match="intégralement"):
+        export_analysis(changed, tmp_path)
+
+    restored = {
+        path.name: path.read_bytes() for path in reports.directory.iterdir() if path.is_file()
+    }
+    assert restored == previous
+    assert not list(reports.directory.glob("*.tmp"))
+
+
+def test_report_set_keeps_recoverable_backup_if_rollback_itself_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reports = export_analysis(_analysis(), tmp_path)
+    assert reports.directory is not None
+    assert reports.markdown is not None
+    previous_markdown = reports.markdown.read_bytes()
+    original_replace = Path.replace
+    commit_count = 0
+
+    def failing_replace(source: Path, target: Path):
+        nonlocal commit_count
+        if source.name == ".game_summary.md.rollback.tmp":
+            raise OSError("rollback simulé")
+        if source.suffix == ".tmp" and "rollback" not in source.name:
+            commit_count += 1
+            if commit_count == 2:
+                raise OSError("commit simulé")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+
+    with pytest.raises(ExportError, match="lot précédent"):
+        export_analysis(_analysis(), tmp_path)
+
+    backup = reports.directory / ".game_summary.md.rollback.tmp"
+    assert backup.read_bytes() == previous_markdown
