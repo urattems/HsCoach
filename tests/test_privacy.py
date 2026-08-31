@@ -33,13 +33,13 @@ def test_real_player_names_and_accounts_never_enter_analysis_model() -> None:
 
 def test_signed_url_and_battletag_are_redacted() -> None:
     raw = (
-        "Urattems596#2531 "
+        "JoueurTest#1234 "
         "https://bucket.example/replay.xml?X-Amz-Credential=ABC&X-Amz-Signature=SECRET"
     )
 
     redacted = redact_sensitive_text(raw)
 
-    assert "Urattems" not in redacted
+    assert "JoueurTest" not in redacted
     assert "SECRET" not in redacted
     assert "bucket.example" in redacted
 

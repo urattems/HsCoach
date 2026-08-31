@@ -377,11 +377,10 @@ def _minion(minion: MinionState) -> str:
 
 
 def _decision_lines(decision: Decision) -> list[str]:
-    chosen = [
-        option
-        for option in decision.options
-        if option.selected and not _is_invalid_end_turn_marker(option)
-    ]
+    # Une sélection explicitement envoyée est un fait plus fort que le marqueur
+    # d'erreur attaché à l'option par le protocole. Le marqueur reste disponible
+    # dans le JSON complet, mais ne doit pas faire disparaître l'action choisie.
+    chosen = [option for option in decision.options if option.selected]
     available = [
         option
         for option in decision.options
@@ -445,7 +444,9 @@ def _observed_delta_lines(deltas: list[EntityDelta]) -> list[str]:
             TurnPhase.TURN_START: "au début du demi-tour",
             TurnPhase.UNKNOWN: "phase non déterminée",
         }[delta.phase]
-        card = delta.card.name if delta.card is not None else f"Entité {delta.entity_id}"
+        # Le Markdown est partageable : un identifiant protocolaire brut pourrait
+        # relier rétroactivement ce changement à une carte révélée plus tard.
+        card = delta.card.name if delta.card is not None else "Entité inconnue"
         attribute = {
             "attack": "attaque",
             "health": "points de vie",

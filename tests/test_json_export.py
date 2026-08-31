@@ -6,13 +6,16 @@ import pytest
 from hscoach.exceptions import ExportError
 from hscoach.models import (
     ActionType,
+    Decision,
     GameAction,
     GameAnalysis,
     InformationSource,
     ParseWarning,
     Player,
     PlayerSide,
+    RecordedOption,
     ReplayMetadata,
+    TurnState,
 )
 from hscoach.output.json_export import (
     analysis_to_dict,
@@ -143,3 +146,37 @@ def test_unknown_schema_version_is_rejected() -> None:
 
     with pytest.raises(ExportError, match="version du schéma JSON"):
         analysis_to_dict(analysis)
+
+
+def test_full_json_preserves_selected_option_and_raw_diagnostic_error() -> None:
+    analysis = _analysis()
+    analysis.turns = [
+        TurnState(
+            turn_number=1,
+            round_number=1,
+            active_player=PlayerSide.PLAYER,
+            decisions=[
+                Decision(
+                    sequence=1,
+                    timestamp=None,
+                    selected_option_index=0,
+                    options=[
+                        RecordedOption(
+                            index=0,
+                            option_type="Fin du tour",
+                            description="Terminer le tour",
+                            error="INVALID",
+                            available=False,
+                            selected=True,
+                        )
+                    ],
+                )
+            ],
+        )
+    ]
+
+    option = analysis_to_dict(analysis)["turns"][0]["decisions"][0]["options"][0]
+
+    assert option["selected"] is True
+    assert option["available"] is False
+    assert option["error"] == "INVALID"

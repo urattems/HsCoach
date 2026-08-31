@@ -9,6 +9,7 @@ venv/
 *.hsreplay
 *.egg-info/
 .pytest_cache/
+.test-tmp/
 .mypy_cache/
 .ruff_cache/
 dist/

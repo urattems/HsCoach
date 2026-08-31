@@ -88,6 +88,22 @@ def test_new_options_packet_preserves_previous_unanswered_decision() -> None:
     assert decisions[1].options[0].selected is True
 
 
+def test_explicit_selected_end_turn_remains_selected_despite_invalid_marker() -> None:
+    context = parse_replay_data(_selected_invalid_end_turn_fixture())
+
+    result = extract_decisions(context, CardResolver({}))
+
+    decision = result.by_turn[1][0]
+    selected, unselected = decision.options
+    assert decision.selected_option_index == 0
+    assert selected.selected is True
+    assert selected.available is False
+    assert selected.error == "INVALID"
+    assert unselected.selected is False
+    assert unselected.available is False
+    assert unselected.error == "INVALID"
+
+
 def _choice_fixture() -> bytes:
     return b"""\
 <HSReplay build="1" version="1.7">
@@ -122,5 +138,22 @@ def _consecutive_options_fixture() -> bytes:
 </Options>
 <SendOption option="1" subOption="0" target="0" position="0"
  ts="2026-01-01T00:00:03+00:00"/>
+</Game></HSReplay>
+"""
+
+
+def _selected_invalid_end_turn_fixture() -> bytes:
+    return b"""\
+<HSReplay build="1" version="1.7">
+<Game id="selected-invalid"><GameEntity id="1"/>
+<Player id="2" playerID="1" accountHi="0" accountLo="1"/>
+<Player id="3" playerID="2" accountHi="0" accountLo="2"/>
+<TagChange entity="1" tag="20" value="1"/>
+<Options id="1" ts="2026-01-01T00:00:01+00:00">
+<Option index="0" type="2" error="INVALID"/>
+<Option index="1" type="2" error="INVALID"/>
+</Options>
+<SendOption option="0" subOption="0" target="0" position="0"
+ ts="2026-01-01T00:00:02+00:00"/>
 </Game></HSReplay>
 """

@@ -201,6 +201,32 @@ def test_markdown_hides_invalid_end_turn_marker_and_labels_option_availability()
     assert "REQ_ENOUGH_MANA" not in report
 
 
+def test_markdown_keeps_an_explicitly_selected_invalid_end_turn() -> None:
+    analysis = analysis_fixture()
+    analysis.turns[0].decisions = [
+        Decision(
+            sequence=1,
+            timestamp=None,
+            selected_option_index=0,
+            options=[
+                RecordedOption(
+                    index=0,
+                    option_type="Fin du tour",
+                    description="Terminer le tour",
+                    error="INVALID",
+                    available=False,
+                    selected=True,
+                )
+            ],
+        )
+    ]
+
+    report = render_markdown(analysis)
+
+    assert "Action choisie : Terminer le tour" in report
+    assert "INVALID" not in report
+
+
 def test_markdown_deduplicates_protocol_only_beatrix_occurrence() -> None:
     analysis = analysis_fixture()
     analysis.start_of_game_events = _beatrix_start_events(protocol_only_second=True)
@@ -243,6 +269,26 @@ def test_markdown_keeps_gameplay_delta_but_hides_technical_enchantment_name() ->
 
     assert "points de vie : 3 → 5 (+2)" in report
     assert "Cost - 2" not in report
+
+
+def test_markdown_never_prints_raw_entity_id_for_unresolved_delta() -> None:
+    analysis = analysis_fixture()
+    analysis.turns[0].entity_deltas = [
+        EntityDelta(
+            sequence=3,
+            entity_id=830001,
+            side=PlayerSide.OPPONENT,
+            phase=TurnPhase.ACTION_PHASE_END,
+            attribute="zone",
+            value=ValueDelta(before="DECK", after="HAND"),
+            card=None,
+        )
+    ]
+
+    report = render_markdown(analysis)
+
+    assert "Entité inconnue" in report
+    assert "830001" not in report
 
 
 def _beatrix_start_events(*, protocol_only_second: bool) -> list[GameAction]:

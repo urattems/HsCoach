@@ -126,6 +126,13 @@ dans le répertoire choisi. Selon les cases cochées, HSCoach crée :
 `game_analysis.json`, au schéma `2.0`, conserve les paquets classés, diagnostics et
 données techniques nécessaires à l’audit.
 
+Dans le JSON compact, une carte adverse encore cachée reçoit un alias opaque et
+déterministe tel que `hidden:h1`. Cet alias ne contient aucun identifiant protocolaire et
+n’est jamais relié à l’entité publique si la carte est révélée plus tard. Le JSON complet
+conserve en revanche les identifiants protocolaires nécessaires au diagnostic : bien
+qu’anonymisé et contrôlé contre les données de compte, il ne doit pas servir directement
+d’entrée de coaching lorsque l’isolation temporelle des cartes cachées est requise.
+
 Exemple simplifié de faits rendus :
 
 ```text
@@ -287,8 +294,10 @@ La checklist détaillée se trouve dans
 - Taille, timeout, racine XML et dossier de sortie sont validés.
 - `samples/`, `output/`, `.cache/`, `.venv/`, `dist/` et `build/` sont ignorés par Git.
 
-Les rapports sont conçus pour être partageables, mais le replay brut reste une donnée
-privée. Ne l’ajoutez jamais à un ticket ou à un dépôt public.
+Le Markdown et le JSON compact sont conçus pour être partageables. Le JSON complet est
+un rapport de diagnostic anonymisé, mais ses identifiants protocolaires peuvent relier
+une entité cachée à sa révélation ultérieure. Le replay brut reste une donnée privée. Ne
+l’ajoutez jamais à un ticket ou à un dépôt public.
 
 ## Limites
 

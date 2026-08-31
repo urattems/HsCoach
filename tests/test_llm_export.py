@@ -20,12 +20,16 @@ from hscoach.models import (
     Player,
     PlayerSide,
     Provenance,
+    RecordedChoice,
     RecordedOption,
     ReplayMetadata,
     SideState,
+    StateDelta,
     TurnPhase,
     TurnState,
     ValueDelta,
+    Visibility,
+    ZoneDelta,
 )
 from hscoach.output import ExportedReports, export_analysis
 from hscoach.output.json_export import analysis_to_dict
@@ -335,8 +339,204 @@ def test_llm_serializes_structured_provenance_for_a_real_creation() -> None:
 
     assert generated.created_by_entity_id == 12
     assert compact["cards"]["entities"]["13"]["provenance"] == {
-        "creator_entity_id": 12,
+        "creator_entity_id": None,
         "creator_card_id": "JAIL_850",
         "confidence": "replay_explicit",
     }
     assert compact["important_events"] == [8, 13]
+
+
+def test_llm_hidden_handles_are_opaque_stable_and_do_not_link_a_later_reveal() -> None:
+    hidden_first = CardRef(
+        entity_id=830001,
+        card_id=None,
+        name="Carte inconnue",
+        visibility=Visibility.HIDDEN,
+        provenance=Provenance(creator_entity_id=830002, creator_card_id="SOURCE"),
+    )
+    hidden_second = CardRef(
+        entity_id=830002,
+        card_id=None,
+        name="Carte inconnue",
+        visibility=Visibility.HIDDEN,
+    )
+    revealed = CardRef(
+        entity_id=830001,
+        card_id="REVEALED",
+        name="Carte révélée",
+    )
+    hidden_state = BoardState(
+        player=SideState(side=PlayerSide.PLAYER),
+        opponent=SideState(
+            side=PlayerSide.OPPONENT,
+            hand=[hidden_first, hidden_second, hidden_first],
+            hidden_hand_count=2,
+        ),
+    )
+    hidden_action = GameAction(
+        sequence=1,
+        action_type=ActionType.DRAW,
+        player=PlayerSide.OPPONENT,
+        description="ADVERSAIRE pioche une carte inconnue.",
+        target_card=hidden_first,
+        metadata={
+            "entity_id": 830001,
+            "target_entity_id": 830001,
+            "source_entity_id": 830002,
+            "offered_entity_ids": [830001, 830002],
+            "chosen_entity_ids": [830001],
+            "protocol_events": [
+                {
+                    "entity": 830001,
+                    "entity_id": 830001,
+                    "auxiliary_entity_ids": [830001, 830002],
+                    "target_entity_id": 830002,
+                }
+            ],
+        },
+    )
+    hidden_delta = EntityDelta(
+        sequence=2,
+        entity_id=830001,
+        side=PlayerSide.OPPONENT,
+        phase=TurnPhase.ACTION_PHASE_END,
+        attribute="zone",
+        value=ValueDelta(before="DECK", after="HAND"),
+        card=hidden_first,
+        source_card=hidden_second,
+        metadata={"entity_id": 830001, "creator_entity_id": 830002},
+    )
+    analysis = GameAnalysis(
+        metadata=ReplayMetadata(game_id="temporal-hidden"),
+        player=Player(side=PlayerSide.PLAYER, entity_id=2, player_id=1),
+        opponent=Player(side=PlayerSide.OPPONENT, entity_id=3, player_id=2),
+        turns=[
+            TurnState(
+                turn_number=1,
+                round_number=1,
+                active_player=PlayerSide.OPPONENT,
+                action_phase_start_state=hidden_state,
+                action_phase_end_state=hidden_state,
+                actions=[hidden_action],
+                decisions=[
+                    Decision(
+                        sequence=3,
+                        timestamp=None,
+                        options=[
+                            RecordedOption(
+                                index=1,
+                                option_type="Action",
+                                description="Action inconnue",
+                                entity=hidden_first,
+                                targets=[hidden_second],
+                                selected=True,
+                            )
+                        ],
+                        selected_option_index=1,
+                        selected_target_entity_id=830002,
+                    )
+                ],
+                choices=[
+                    RecordedChoice(
+                        sequence=4,
+                        timestamp=None,
+                        choice_type="Choix général",
+                        player=PlayerSide.OPPONENT,
+                        offered=[hidden_first, hidden_second],
+                        chosen=[hidden_first],
+                        source_card=hidden_second,
+                        completed=True,
+                    )
+                ],
+                entity_deltas=[hidden_delta],
+                state_deltas=[
+                    StateDelta(
+                        from_phase=TurnPhase.ACTION_PHASE_START,
+                        to_phase=TurnPhase.ACTION_PHASE_END,
+                        zones=[
+                            ZoneDelta(
+                                entity_id=830001,
+                                side=PlayerSide.OPPONENT,
+                                from_zone="DECK",
+                                to_zone="HAND",
+                                card=hidden_first,
+                            )
+                        ],
+                    )
+                ],
+            ),
+            TurnState(
+                turn_number=2,
+                round_number=1,
+                active_player=PlayerSide.OPPONENT,
+                actions=[
+                    GameAction(
+                        sequence=5,
+                        action_type=ActionType.PLAY_CARD,
+                        player=PlayerSide.OPPONENT,
+                        description="ADVERSAIRE joue Carte révélée.",
+                        source_card=revealed,
+                        metadata={"entity_id": 830001},
+                    )
+                ],
+            ),
+        ],
+    )
+
+    first_render = render_llm_json(analysis)
+    second_render = render_llm_json(analysis)
+    first = json.loads(first_render)
+    historic_turn = json.dumps(first["turns"][0], ensure_ascii=False)
+
+    assert first_render == second_render
+    assert "hidden:830001" not in first_render
+    assert "hidden:830002" not in first_render
+    assert "830001" not in historic_turn
+    assert "830002" not in historic_turn
+    assert first["cards"]["entities"]["hidden:h1"] == {
+        "card": "hidden",
+        "visibility": "hidden",
+    }
+    assert first["cards"]["entities"]["hidden:h2"] == {
+        "card": "hidden",
+        "visibility": "hidden",
+    }
+    assert first["turns"][0]["action_phase_start"]["opponent"]["hand"] == [
+        "hidden:h1",
+        "hidden:h2",
+        "hidden:h1",
+    ]
+    assert first["turns"][0]["decisions"][0]["selected_target_entity"] == "hidden:h2"
+    assert "creator_entity_id" not in json.dumps(first, ensure_ascii=False)
+    assert first["turns"][1]["actions"][0]["source_card"] == 830001
+    assert first["cards"]["entities"]["830001"]["card"] == "REVEALED"
+    assert "hidden:h1" not in json.dumps(first["cards"]["entities"]["830001"], ensure_ascii=False)
+    assert "830001" not in json.dumps(first["cards"]["entities"]["hidden:h1"], ensure_ascii=False)
+
+
+def test_llm_selected_option_wins_over_an_invalid_protocol_marker() -> None:
+    analysis = _analysis()
+    decision = analysis.turns[0].decisions[0]
+    decision.selected_option_index = 0
+    decision.options = [
+        RecordedOption(
+            index=0,
+            option_type="Fin du tour",
+            description="Terminer le tour",
+            error="INVALID",
+            available=False,
+            selected=True,
+        ),
+        RecordedOption(
+            index=1,
+            option_type="Action",
+            description="Option indisponible",
+            error="INVALID",
+            available=False,
+        ),
+    ]
+
+    options = analysis_to_llm_dict(analysis)["turns"][0]["decisions"][0]["options"]
+
+    assert options["chosen"] == [[0, "Fin du tour", None, [], "INVALID"]]
+    assert options["unavailable"] == [[1, "Action", None, [], "INVALID"]]

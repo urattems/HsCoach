@@ -244,6 +244,13 @@ protocolaires sont additifs ; la correction de `CARD_CREATED` retire une interpr
 fausse sans transformer le contrat structurel. Si une clé est supprimée, renommée ou
 change de type, augmenter le schéma concerné avant la livraison.
 
+Le hotfix `2.2.2` conserve ces deux schémas. Dans `game_llm.json`, toute référence encore
+cachée utilise un alias opaque déterministe `hidden:hN` qui ne contient ni ne publie son
+identifiant protocolaire. Une révélation ultérieure ne publie aucune correspondance vers
+cet alias. `game_analysis.json` reste le document d’audit exhaustif : il conserve les
+identifiants protocolaires et ne constitue donc pas une entrée de coaching garantissant
+l’isolation temporelle, même s’il reste anonymisé et soumis à la garde de confidentialité.
+
 `game_llm.json` suit son propre schéma `hscoach-llm/1.0`, porté par le champ
 `schema_version`. Sa racine contient `game`, `cards`, `player_deck`, `mulligan`,
 `start_of_game_events`, `turns`, `important_events` et `warnings`. Les données statiques

@@ -350,6 +350,75 @@ def test_creator_provenance_does_not_fabricate_late_creation_events() -> None:
     )
 
 
+def test_auxiliary_setaside_entity_from_inactive_creator_is_not_gameplay_creation() -> None:
+    result = extract_timeline(
+        parse_replay_data(_auxiliary_setaside_fixture()),
+        FakeResolver(),
+        player_entity_id=2,
+        opponent_entity_id=3,
+    )
+    actions = result.turns[0].actions
+
+    assert result.entity_card_ids[42] == "AUXILIARY"
+    assert not any(
+        action.action_type is ActionType.CARD_CREATED
+        and action.target_card is not None
+        and action.target_card.entity_id == 42
+        for action in actions
+    )
+
+
+def test_full_entity_inside_play_block_without_creator_is_not_creation() -> None:
+    result = extract_timeline(
+        parse_replay_data(_uncorrelated_full_entity_fixture()),
+        FakeResolver(),
+        player_entity_id=2,
+        opponent_entity_id=3,
+    )
+
+    assert result.entity_card_ids[42] == "UNRELATED"
+    assert not any(
+        action.action_type is ActionType.CARD_CREATED
+        and action.target_card is not None
+        and action.target_card.entity_id == 42
+        for action in result.turns[0].actions
+    )
+
+
+def test_created_entity_entering_hand_keeps_factual_add_to_hand_with_provenance() -> None:
+    result = extract_timeline(
+        parse_replay_data(_created_to_hand_fixture()),
+        FakeResolver(),
+        player_entity_id=2,
+        opponent_entity_id=3,
+    )
+    actions = result.turns[0].actions
+
+    added = next(action for action in actions if action.action_type is ActionType.ADD_TO_HAND)
+    assert added.target_card is not None
+    assert added.target_card.entity_id == 42
+    assert added.target_card.provenance is not None
+    assert added.target_card.provenance.creator_entity_id == 20
+    assert not any(action.action_type is ActionType.CARD_CREATED for action in actions)
+
+
+def test_new_token_entering_play_keeps_factual_summon_without_auxiliary_creation() -> None:
+    result = extract_timeline(
+        parse_replay_data(_summoned_token_fixture()),
+        FakeResolver(),
+        player_entity_id=2,
+        opponent_entity_id=3,
+    )
+    actions = result.turns[0].actions
+
+    summon = next(action for action in actions if action.action_type is ActionType.SUMMON)
+    assert summon.source_card is not None
+    assert summon.source_card.entity_id == 20
+    assert summon.target_card is not None
+    assert summon.target_card.entity_id == 42
+    assert not any(action.action_type is ActionType.CARD_CREATED for action in actions)
+
+
 @pytest.mark.parametrize("activation_count", [1, 2])
 def test_nested_hero_power_blocks_emit_one_action_per_root_activation(
     activation_count: int,
@@ -504,6 +573,123 @@ def _creation_provenance_fixture() -> bytes:
 </Game></HSReplay>
 """
     return xml.encode()
+
+
+def _created_to_hand_fixture() -> bytes:
+    zone = int(GameTag.ZONE)
+    controller = int(GameTag.CONTROLLER)
+    card_type = int(GameTag.CARDTYPE)
+    creator = int(GameTag.CREATOR)
+    turn = int(GameTag.TURN)
+    step = int(GameTag.STEP)
+    current_player = int(GameTag.CURRENT_PLAYER)
+    return f"""\
+<HSReplay build="1" version="1.7">
+<Game id="created-to-hand"><GameEntity id="1"/>
+<Player id="2" playerID="1" accountHi="0" accountLo="1"/>
+<Player id="3" playerID="2" accountHi="0" accountLo="2"/>
+<FullEntity id="20" cardID="SOURCE"><Tag tag="{zone}" value="{int(Zone.PLAY)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.MINION)}"/>
+</FullEntity>
+<TagChange entity="2" tag="{current_player}" value="1"/>
+<TagChange entity="1" tag="{turn}" value="1"/>
+<TagChange entity="1" tag="{step}" value="6"/>
+<TagChange entity="1" tag="{step}" value="10"/>
+<Block entity="20" type="3" target="42">
+<FullEntity id="42" cardID="GENERATED"><Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.SPELL)}"/>
+<Tag tag="{creator}" value="20"/></FullEntity>
+<TagChange entity="42" tag="{zone}" value="{int(Zone.HAND)}"/>
+</Block>
+</Game></HSReplay>
+""".encode()
+
+
+def _auxiliary_setaside_fixture() -> bytes:
+    zone = int(GameTag.ZONE)
+    controller = int(GameTag.CONTROLLER)
+    card_type = int(GameTag.CARDTYPE)
+    creator = int(GameTag.CREATOR)
+    turn = int(GameTag.TURN)
+    step = int(GameTag.STEP)
+    current_player = int(GameTag.CURRENT_PLAYER)
+    return f"""\
+<HSReplay build="1" version="1.7">
+<Game id="auxiliary-setaside"><GameEntity id="1"/>
+<Player id="2" playerID="1" accountHi="0" accountLo="1"/>
+<Player id="3" playerID="2" accountHi="0" accountLo="2"/>
+<FullEntity id="20" cardID="INACTIVE_SOURCE">
+<Tag tag="{zone}" value="{int(Zone.HAND)}"/><Tag tag="{controller}" value="1"/>
+<Tag tag="{card_type}" value="{int(CardType.MINION)}"/></FullEntity>
+<TagChange entity="2" tag="{current_player}" value="1"/>
+<TagChange entity="1" tag="{turn}" value="1"/>
+<TagChange entity="1" tag="{step}" value="6"/>
+<TagChange entity="1" tag="{step}" value="10"/>
+<Block entity="20" type="3"><Block entity="20" type="3">
+<FullEntity id="42" cardID="AUXILIARY">
+<Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/><Tag tag="{controller}" value="1"/>
+<Tag tag="{card_type}" value="{int(CardType.MINION)}"/>
+<Tag tag="{creator}" value="20"/></FullEntity>
+</Block></Block>
+</Game></HSReplay>
+""".encode()
+
+
+def _uncorrelated_full_entity_fixture() -> bytes:
+    zone = int(GameTag.ZONE)
+    controller = int(GameTag.CONTROLLER)
+    card_type = int(GameTag.CARDTYPE)
+    turn = int(GameTag.TURN)
+    step = int(GameTag.STEP)
+    current_player = int(GameTag.CURRENT_PLAYER)
+    return f"""\
+<HSReplay build="1" version="1.7">
+<Game id="uncorrelated-full-entity"><GameEntity id="1"/>
+<Player id="2" playerID="1" accountHi="0" accountLo="1"/>
+<Player id="3" playerID="2" accountHi="0" accountLo="2"/>
+<FullEntity id="20" cardID="SOURCE"><Tag tag="{zone}" value="{int(Zone.HAND)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.MINION)}"/>
+</FullEntity>
+<TagChange entity="2" tag="{current_player}" value="1"/>
+<TagChange entity="1" tag="{turn}" value="1"/>
+<TagChange entity="1" tag="{step}" value="6"/>
+<TagChange entity="1" tag="{step}" value="10"/>
+<Block entity="20" type="7">
+<FullEntity id="42" cardID="UNRELATED">
+<Tag tag="{zone}" value="{int(Zone.SETASIDE)}"/><Tag tag="{controller}" value="1"/>
+<Tag tag="{card_type}" value="{int(CardType.SPELL)}"/></FullEntity>
+</Block>
+</Game></HSReplay>
+""".encode()
+
+
+def _summoned_token_fixture() -> bytes:
+    zone = int(GameTag.ZONE)
+    controller = int(GameTag.CONTROLLER)
+    card_type = int(GameTag.CARDTYPE)
+    creator = int(GameTag.CREATOR)
+    turn = int(GameTag.TURN)
+    step = int(GameTag.STEP)
+    current_player = int(GameTag.CURRENT_PLAYER)
+    return f"""\
+<HSReplay build="1" version="1.7">
+<Game id="summoned-token"><GameEntity id="1"/>
+<Player id="2" playerID="1" accountHi="0" accountLo="1"/>
+<Player id="3" playerID="2" accountHi="0" accountLo="2"/>
+<FullEntity id="20" cardID="SOURCE"><Tag tag="{zone}" value="{int(Zone.PLAY)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.MINION)}"/>
+</FullEntity>
+<TagChange entity="2" tag="{current_player}" value="1"/>
+<TagChange entity="1" tag="{turn}" value="1"/>
+<TagChange entity="1" tag="{step}" value="6"/>
+<TagChange entity="1" tag="{step}" value="10"/>
+<Block entity="20" type="3" target="42">
+<FullEntity id="42" cardID="TOKEN"><Tag tag="{zone}" value="{int(Zone.PLAY)}"/>
+<Tag tag="{controller}" value="1"/><Tag tag="{card_type}" value="{int(CardType.MINION)}"/>
+<Tag tag="{creator}" value="20"/></FullEntity>
+</Block>
+</Game></HSReplay>
+""".encode()
 
 
 def _hero_power_fixture(activation_count: int) -> bytes:

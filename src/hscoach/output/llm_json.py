@@ -20,6 +20,23 @@ from hscoach.replay.timeline import gameplay_start_event_groups
 
 LLM_JSON_FILENAME = "game_llm.json"
 LLM_SCHEMA = "hscoach-llm/1.0"
+_ENTITY_IDENTIFIER_METADATA_KEYS = frozenset(
+    {
+        "chosen_entity_ids",
+        "created_by_entity_id",
+        "creator_entity_id",
+        "entities",
+        "entity",
+        "entity_id",
+        "entity_ids",
+        "offered_entity_ids",
+        "selected_target_entity",
+        "selected_target_entity_id",
+        "source_entity",
+        "target_entity",
+        "target_entity_id",
+    }
+)
 
 __all__ = [
     "LLM_JSON_FILENAME",
@@ -37,6 +54,7 @@ class _CompactDocument:
         self.card_definitions: dict[str, dict[str, Any]] = {}
         self.entities: dict[str, dict[str, Any]] = {}
         self.exported_sequences: set[int] = set()
+        self.hidden_handles: dict[int, str] = {}
 
     def build(self, analysis: GameAnalysis) -> dict[str, Any]:
         game = {
@@ -252,7 +270,7 @@ class _CompactDocument:
                     if action.information_source is not InformationSource.REPLAY_EXPLICIT
                     else None
                 ),
-                "details": _compact_action_metadata(action.metadata) or None,
+                "details": self._compact_action_metadata(action.metadata) or None,
             }
         )
 
@@ -264,7 +282,7 @@ class _CompactDocument:
         }
         for option in decision.options:
             status = "chosen" if option.selected else "available"
-            if not option.available:
+            if not option.selected and not option.available:
                 status = "unavailable"
             # Chaque ligne vaut [index, type, entity, targets, raw_error].
             options[status].append(
@@ -276,13 +294,22 @@ class _CompactDocument:
                     option.error,
                 ]
             )
+        selected_target = next(
+            (
+                target
+                for option in decision.options
+                for target in option.targets
+                if target.entity_id == decision.selected_target_entity_id
+            ),
+            None,
+        )
         return _drop_none(
             {
                 "seq": decision.sequence,
                 "options": {status: rows for status, rows in options.items() if rows},
                 "selected_option": decision.selected_option_index,
                 "selected_suboption": decision.selected_suboption_index,
-                "selected_target_entity": decision.selected_target_entity_id,
+                "selected_target_entity": self._ref(selected_target),
                 "selected_position": decision.selected_position,
             }
         )
@@ -303,7 +330,8 @@ class _CompactDocument:
     def _entity_delta(self, delta: Any) -> list[Any]:
         # [seq, entity, side, phase, attribute, before, after, delta,
         #  card, explicit_source_card, information_source, metadata]
-        card_reference = self._ref(delta.card)
+        entity_reference = self._ref(delta.card)
+        card_reference = entity_reference
         if delta.card is not None and delta.card.entity_id == delta.entity_id:
             card_reference = None
         information_source = (
@@ -313,7 +341,7 @@ class _CompactDocument:
         )
         result = [
             delta.sequence,
-            delta.entity_id,
+            entity_reference,
             delta.side.value,
             delta.phase.value,
             delta.attribute,
@@ -323,7 +351,7 @@ class _CompactDocument:
             card_reference,
             self._ref(delta.source_card),
             information_source,
-            _compact_entity_metadata(delta.metadata) or None,
+            self._compact_entity_metadata(delta.metadata) or None,
         ]
         while result and result[-1] is None:
             result.pop()
@@ -365,13 +393,13 @@ class _CompactDocument:
         )
 
     def _zone_delta(self, delta: Any) -> dict[str, Any]:
+        entity_reference = self._ref(delta.card)
         return _drop_none(
             {
-                "entity": delta.entity_id,
+                "entity": entity_reference,
                 "side": delta.side.value,
                 "from": delta.from_zone,
                 "to": delta.to_zone,
-                "card": self._ref(delta.card),
             }
         )
 
@@ -403,7 +431,7 @@ class _CompactDocument:
             self.card_definitions.setdefault(
                 key, {"name": "Carte inconnue", "visibility": "hidden"}
             )
-            reference = f"hidden:{card.entity_id}" if card.entity_id is not None else "hidden"
+            reference = self._hidden_handle(card.entity_id)
             self.entities.setdefault(reference, {"card": key, "visibility": "hidden"})
             return reference
 
@@ -425,18 +453,32 @@ class _CompactDocument:
             return card.entity_id
         return key
 
+    def _hidden_handle(self, entity_id: int | None) -> str:
+        if entity_id is None:
+            return "hidden"
+        handle = self.hidden_handles.get(entity_id)
+        if handle is None:
+            handle = f"hidden:h{len(self.hidden_handles) + 1}"
+            self.hidden_handles[entity_id] = handle
+        return handle
+
     @staticmethod
     def _provenance(card: CardRef) -> dict[str, Any] | None:
         provenance = card.provenance
         if provenance is None:
             return None
-        return _drop_none(
-            {
-                "creator_entity_id": provenance.creator_entity_id,
-                "creator_card_id": provenance.creator_card_id,
-                "confidence": provenance.confidence.value,
-            }
-        )
+        return {
+            # La clé reste présente pour le contrat 1.0, mais l'identifiant brut
+            # n'apporte rien au raisonnement et pourrait relier une source cachée
+            # à sa révélation ultérieure.
+            "creator_entity_id": None,
+            **_drop_none(
+                {
+                    "creator_card_id": provenance.creator_card_id,
+                    "confidence": provenance.confidence.value,
+                }
+            ),
+        }
 
     @staticmethod
     def _card_key(card: CardRef) -> str:
@@ -463,6 +505,93 @@ class _CompactDocument:
                 "mechanics": list(card.mechanics) or None,
             }
         )
+
+    @staticmethod
+    def _is_entity_identifier_metadata_key(key: object) -> bool:
+        normalized = str(key).casefold()
+        return normalized in _ENTITY_IDENTIFIER_METADATA_KEYS or normalized.endswith(
+            ("_entity_id", "_entity_ids")
+        )
+
+    @staticmethod
+    def _remove_entity_identifier_metadata(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): _CompactDocument._remove_entity_identifier_metadata(item)
+                for key, item in value.items()
+                if not _CompactDocument._is_entity_identifier_metadata_key(key)
+            }
+        if isinstance(value, (list, tuple)):
+            return [_CompactDocument._remove_entity_identifier_metadata(item) for item in value]
+        return value
+
+    def _compact_action_metadata(self, metadata: Mapping[str, Any]) -> dict[str, Any]:
+        """Conserver des précisions sémantiques sans identifiant protocolaire brut."""
+
+        redundant = {
+            "after",
+            "amount",
+            "before",
+            "delta",
+            "entity_id",
+            "phase",
+            "source_explicit",
+            "damage_tag_before",
+            "damage_tag_after",
+            "created_by_entity_id",
+            "effect_index",
+            "protocol_only_reveal",
+            "trigger_keyword",
+            "stats_after",
+            "stats_before",
+            "tag",
+        }
+        compact_keys = {
+            "after": "a",
+            "amount": "n",
+            "before": "b",
+            "block_type": "block",
+            "delta": "d",
+            "from_zone": "from",
+            "phase": "phase",
+            "playstate": "result",
+            "stats_after": "stats_after",
+            "stats_before": "stats_before",
+            "tag": "tag",
+            "to_zone": "to",
+        }
+        return {
+            compact_keys.get(key, key): _plain(self._remove_entity_identifier_metadata(value))
+            for key, value in metadata.items()
+            if key not in redundant
+            and not self._is_entity_identifier_metadata_key(key)
+            and value is not None
+        }
+
+    def _compact_entity_metadata(self, metadata: Mapping[str, Any]) -> dict[str, Any]:
+        """Conserver les précisions absentes du delta sans identifiant brut."""
+
+        represented_by_delta = {
+            "after",
+            "amount",
+            "before",
+            "damage_tag_after",
+            "damage_tag_before",
+            "delta",
+            "entity_id",
+            "phase",
+            "source_explicit",
+            "stats_after",
+            "stats_before",
+            "tag",
+        }
+        return {
+            key: _plain(self._remove_entity_identifier_metadata(value))
+            for key, value in metadata.items()
+            if key not in represented_by_delta
+            and not self._is_entity_identifier_metadata_key(key)
+            and value is not None
+        }
 
 
 def analysis_to_llm_dict(analysis: GameAnalysis) -> dict[str, Any]:
@@ -554,71 +683,3 @@ def _plain(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     raise TypeError(f"Type JSON non pris en charge : {type(value).__name__}")
-
-
-def _compact_action_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
-    """Retirer les répétitions déjà portées par l'action et ses références."""
-
-    redundant = {
-        "after",
-        "amount",
-        "before",
-        "delta",
-        "entity_id",
-        "phase",
-        "source_explicit",
-        "damage_tag_before",
-        "damage_tag_after",
-        "created_by_entity_id",
-        "effect_index",
-        "protocol_only_reveal",
-        "trigger_keyword",
-        "stats_after",
-        "stats_before",
-        "tag",
-    }
-    compact_keys = {
-        "after": "a",
-        "amount": "n",
-        "before": "b",
-        "block_type": "block",
-        "created_by_entity_id": "created_by",
-        "delta": "d",
-        "from_zone": "from",
-        "phase": "phase",
-        "playstate": "result",
-        "stats_after": "stats_after",
-        "stats_before": "stats_before",
-        "tag": "tag",
-        "target_entity_id": "target",
-        "to_zone": "to",
-    }
-    return {
-        compact_keys.get(key, key): _plain(value)
-        for key, value in metadata.items()
-        if key not in redundant and value is not None
-    }
-
-
-def _compact_entity_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
-    """Conserver seulement les précisions absentes des colonnes du delta."""
-
-    represented_by_delta = {
-        "after",
-        "amount",
-        "before",
-        "damage_tag_after",
-        "damage_tag_before",
-        "delta",
-        "entity_id",
-        "phase",
-        "source_explicit",
-        "stats_after",
-        "stats_before",
-        "tag",
-    }
-    return {
-        key: _plain(value)
-        for key, value in metadata.items()
-        if key not in represented_by_delta and value is not None
-    }

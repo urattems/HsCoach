@@ -65,6 +65,8 @@ class _EntityState:
     observable_card_id: str | None = None
     tags: dict[GameTag, int] = field(default_factory=dict)
     creation_emitted: bool = False
+    creation_pending: bool = False
+    creation_context: _BlockContext | None = None
     dormant_cached_tags: dict[GameTag, int] = field(default_factory=dict)
     dormant_projection_tags: set[GameTag] = field(default_factory=set)
     dormant_restore_tags: set[GameTag] = field(default_factory=set)
@@ -266,11 +268,13 @@ class _TimelineBuilder:
         if block_type is BlockType.DEATHS:
             previous_count = self.deaths_emitted
             self.death_depth += 1
-            self.block_stack.append(_BlockContext(block_type, entity_id, target_id, sequence=None))
+            context = _BlockContext(block_type, entity_id, target_id, sequence=None)
+            self.block_stack.append(context)
             try:
                 for child in block.packets:
                     self._visit(child)
             finally:
+                self._finalize_pending_creations(context)
                 self.block_stack.pop()
             self.death_depth -= 1
             if self.deaths_emitted == previous_count:
@@ -295,10 +299,12 @@ class _TimelineBuilder:
             }
             else None
         )
-        self.block_stack.append(_BlockContext(block_type, entity_id, target_id, sequence))
+        context = _BlockContext(block_type, entity_id, target_id, sequence)
+        self.block_stack.append(context)
         try:
             for child in block.packets:
                 self._visit(child)
+            self._finalize_pending_creations(context)
         finally:
             self.block_stack.pop()
 
@@ -500,15 +506,17 @@ class _TimelineBuilder:
             state.raw_card_id = card_id
             state.observable_card_id = card_id
         self._apply_tags(state, packet.tags)
-        causally_introduced = introduced and bool(self.block_stack)
+        creation_context = self._creation_context_for(state)
+        paired_introduction = (
+            isinstance(packet, ShowEntity) and self.pending_creation_entity_id == entity_id
+        )
         if (
-            causally_introduced and (state.raw_card_id is not None or state.creator is not None)
-        ) or (
-            isinstance(packet, ShowEntity)
-            and self.pending_creation_entity_id == entity_id
-            and bool(self.block_stack)
+            (introduced or paired_introduction)
+            and creation_context is not None
+            and (state.raw_card_id is not None or state.creator is not None)
         ):
-            self._emit_creation_if_needed(state, observed_introduction=True)
+            state.creation_pending = True
+            state.creation_context = creation_context
             self.pending_creation_entity_id = None
         self._handle_zone_change(state, previous_zone, state.zone)
 
@@ -906,6 +914,13 @@ class _TimelineBuilder:
                     "to_zone": current_zone.name,
                 },
             )
+        if state.creation_pending and current_zone in {Zone.HAND, Zone.PLAY, Zone.DECK}:
+            # Une entrée dans une zone de gameplay a déjà son propre fait public
+            # (ajout en main, invocation ou mélange). Ne pas lui ajouter une
+            # seconde création redondante.
+            state.creation_pending = False
+            state.creation_context = None
+            state.creation_emitted = True
         elif (
             current_zone is Zone.GRAVEYARD
             and previous_zone is Zone.PLAY
@@ -1128,6 +1143,38 @@ class _TimelineBuilder:
             },
             technical=target.technical,
         )
+
+    def _creation_context_for(self, state: _EntityState) -> _BlockContext | None:
+        """Retenir seulement une introduction reliée à une action de gameplay.
+
+        Un ``FullEntity`` auxiliaire peut apparaître dans un bloc au moment où une
+        carte en main est simplement préparée par le protocole. Une pile non vide
+        ne suffit donc pas : la relation ``CREATOR`` doit désigner l'entité du
+        bloc, puis cette source doit être active sur le plateau (ou être la carte
+        explicitement en cours de jeu dans un bloc ``PLAY``).
+        """
+
+        if state.creator is None:
+            return None
+        for context in reversed(self.block_stack):
+            if context.entity_id != state.creator:
+                continue
+            if context.block_type is BlockType.PLAY:
+                return context
+            creator = self.entities.get(state.creator)
+            if creator is not None and creator.zone in {Zone.PLAY, Zone.GRAVEYARD}:
+                return context
+        return None
+
+    def _finalize_pending_creations(self, context: _BlockContext) -> None:
+        """Émettre à la fermeture d'un bloc les créations sans fait plus précis."""
+
+        for state in sorted(self.entities.values(), key=lambda item: item.entity_id):
+            if not state.creation_pending or state.creation_context is not context:
+                continue
+            self._emit_creation_if_needed(state, observed_introduction=True)
+            state.creation_pending = False
+            state.creation_context = None
 
     def _emit_playstate(self, entity_id: int, value: int) -> None:
         try:
